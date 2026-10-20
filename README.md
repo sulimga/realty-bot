@@ -28,7 +28,8 @@ dom.ria можна запускати й старим способом: `python 
 ## Сервер (Oracle Cloud, Ubuntu)
 - Код: `/opt/realty-bot` (git), venv: `/opt/realty-bot/.venv`
 - Дані: `/var/lib/realty-bot` — cookie (`secrets/`), журнал, логи, звіти. **У git не потрапляють.**
-- Налаштування: `/etc/realty-bot.env` (TELEGRAM_TOKEN, GITHUB_TOKEN, REALTY_DATA_DIR)
+- Налаштування: `/etc/realty-bot.env` (TELEGRAM_TOKEN, REALTY_DATA_DIR)
+- Установка з нуля: `deploy/cloud-init.yaml` (вставляється при створенні віртуалки) → `deploy/install.sh`, лог: `/var/log/realty-bot-install.log`
 - Сервіс: `systemctl status realty-bot`, логи: `journalctl -u realty-bot -f`
 - Оновлення: команда `/update` у боті (git pull → перевірка синтаксису → перезапуск; при помилці — відкат)
 
