@@ -150,7 +150,8 @@ async def ask_user(ctx, chat_id, msg):
         ctx.application.bot_data.pop("pending_ask", None)
 
 
-async def run_board(ctx, chat_id, board_key, argv, quiet=False):
+async def run_board(ctx, chat_id, board_key, argv, quiet=False, sent=None):
+    """sent — список, куди складати id надісланих повідомлень (щоб потім прибрати з чату)."""
     b = D.boards(enabled_only=False)[board_key]
     live = LiveLog(ctx.bot, chat_id, f"▶️ <b>{esc(b['title'])}</b>", quiet=quiet)
     await live.flush()
@@ -172,8 +173,10 @@ async def run_board(ctx, chat_id, board_key, argv, quiet=False):
     text = f"{icon} {esc(cut(res.get('text'), 3000))}"
     if res.get("url"):
         text += f"\n{esc(res['url'])}"
-    await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
-                               disable_notification=quiet)
+    m = await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                                   disable_notification=quiet)
+    if sent is not None:
+        sent += [x.message_id for x in (live.msg, m) if x is not None]
     return res
 
 
@@ -340,23 +343,41 @@ async def got_urls_batch(chat_id, ctx, urls):
         parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
+async def _delete(ctx, chat_id, ids):
+    for mid in ids:
+        try:
+            await ctx.bot.delete_message(chat_id, mid)
+        except Exception:  # noqa: BLE001 — уже видалене / старше 48 год
+            pass
+
+
 async def run_batch(ctx, chat_id, urls):
+    """
+    Звіти по кожному оголошенню видно в реальному часі, але в чаті тримається лише
+    попереднє оголошення: коли завершується наступне, звіт попереднього видаляється.
+    Наприкінці все прибирається і приходить один підсумок.
+    """
     bd = ctx.application.bot_data
     bd["busy"] = True
     batch = bd["batch"] = {"n": len(urls), "i": 0, "ok": 0, "stop": False, "started": time.time()}
-    failed, stopped_reason = [], None
+    items, stopped_reason = [], None          # items: (url, res)
+    kept = []                                  # [[id повідомлень оголошення], ...] — ще в чаті
     try:
         for i, url in enumerate(urls, 1):
             if batch["stop"]:
                 stopped_reason = "зупинено командою /cancel"
                 break
             batch["i"] = i
-            await ctx.bot.send_message(chat_id, f"📦 {i}/{len(urls)}", disable_notification=True)
-            res = await run_board(ctx, chat_id, "rieltor", ["post", "--url", url, "--no-ask"], quiet=True)
+            ids = []
+            h = await ctx.bot.send_message(chat_id, f"📦 {i}/{len(urls)}", disable_notification=True)
+            ids.append(h.message_id)
+            res = await run_board(ctx, chat_id, "rieltor", ["post", "--url", url, "--no-ask"], quiet=True, sent=ids)
+            kept.append(ids)
+            while len(kept) > 2:               # поточне + попереднє
+                await _delete(ctx, chat_id, kept.pop(0))
+            items.append((url, res))
             if res.get("ok"):
                 batch["ok"] += 1
-            else:
-                failed.append((url, res.get("text") or ""))
             if res.get("stop_batch"):
                 stopped_reason = res.get("text")
                 break
@@ -368,15 +389,28 @@ async def run_batch(ctx, chat_id, urls):
     finally:
         bd["busy"] = False
         bd.pop("batch", None)
-    lines = [f"📦 Пакет rieltor завершено: ✅ {batch['ok']} з {len(urls)}"]
+        for ids in kept:
+            await _delete(ctx, chat_id, ids)
+
+    mins = int(time.time() - batch["started"]) // 60
+    failed = [(u, r) for u, r in items if not r.get("ok")]
+    head = (f"✅ Усі {len(urls)} оголошень викладено на rieltor.ua" if batch["ok"] == len(urls)
+            else f"📦 rieltor.ua: викладено {batch['ok']} з {len(urls)}")
+    lines = [f"{head} ({mins} хв)", ""]
+    for u, r in items:
+        name = r.get("article") or u
+        if r.get("ok"):
+            lines.append(f"✅ {name}" + (f" — № {r['id']}" if r.get("id") else ""))
+        else:
+            txt = re.sub(r"^rieltor:\s*", "", r.get("text") or "")
+            lines.append(f"❌ {name} — {cut(txt, 150)}" + (f"\n   {u}" if r.get("article") else ""))
+    rest = urls[len(items):]
     if stopped_reason:
-        rest = urls[batch["i"]:]
-        lines.append(f"⛔ Зупинено: {cut(stopped_reason, 300)}")
-        if rest:
-            lines.append(f"Не оброблено ({len(rest)}):\n" + "\n".join(rest))
+        lines += ["", f"⛔ Пакет зупинено: {cut(stopped_reason, 300)}"]
+    if rest:
+        lines += ["", f"Не оброблено ({len(rest)}):"] + rest
     if failed:
-        lines.append(f"❌ З помилкою ({len(failed)}):")
-        lines += [f"• {u}\n  {cut(t, 160)}" for u, t in failed]
+        lines += ["", "Посилання з помилкою можна надіслати ще раз окремо."]
     await ctx.bot.send_message(chat_id, cut("\n".join(lines), 4000), disable_web_page_preview=True,
                                reply_markup=MENU)
 

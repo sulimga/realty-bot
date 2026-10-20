@@ -63,6 +63,8 @@ def cmd_post(a):
     cookie = load_cookie()
     crm = fetch_estate_data(a.url)
     art = (crm.get("article") or "").lstrip("#")
+    _res = bp.result
+    bp.result = lambda ok, text, **kw: _res(ok, text, article=crm.get("article"), **kw)   # артикул — у звіт пакета
 
     photos = crm.get("photos", [])
     if not photos:
