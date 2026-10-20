@@ -1,0 +1,15 @@
+[Unit]
+Description=Realty bot (Telegram -> dom.ria / rieltor.ua)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/realty-bot
+EnvironmentFile=/etc/realty-bot.env
+ExecStart=/opt/realty-bot/.venv/bin/python bot/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

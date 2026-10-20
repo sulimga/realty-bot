@@ -1,0 +1,40 @@
+#cloud-config
+# Скрипт першого запуску віртуалки Oracle (Ubuntu). Вставляється при створенні інстансу:
+# Advanced options -> Management -> Initialization script -> Paste cloud-init script.
+# ПЕРЕД вставкою замініть два значення нижче (TELEGRAM_TOKEN і, якщо репозиторій приватний, GITHUB_TOKEN).
+timezone: Europe/Kiev
+package_update: true
+packages: [git, python3-venv, python3-pip]
+swap:
+  filename: /swapfile
+  size: 1073741824
+write_files:
+  - path: /etc/realty-bot.env
+    permissions: '0640'
+    content: |
+      TELEGRAM_TOKEN=ВСТАВТЕ_СЮДИ_ТОКЕН_БОТА
+      GITHUB_TOKEN=ВСТАВТЕ_СЮДИ_ТОКЕН_GITHUB_АБО_ЗАЛИШТЕ_ПОРОЖНІМ
+      REALTY_DATA_DIR=/var/lib/realty-bot
+  - path: /usr/local/sbin/realty-bot-install.sh
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      set -a; . /etc/realty-bot.env; set +a
+      REPO=github.com/sulimga/realty-bot.git
+      if [ -n "${GITHUB_TOKEN}" ] && [[ "${GITHUB_TOKEN}" != ВСТАВТЕ* ]]; then
+        URL="https://x-access-token:${GITHUB_TOKEN}@${REPO}"
+      else
+        URL="https://${REPO}"
+      fi
+      [ -d /opt/realty-bot/.git ] || git clone --depth 50 "$URL" /opt/realty-bot
+      mkdir -p /var/lib/realty-bot
+      chown -R ubuntu:ubuntu /opt/realty-bot /var/lib/realty-bot
+      chgrp ubuntu /etc/realty-bot.env
+      sudo -u ubuntu python3 -m venv /opt/realty-bot/.venv
+      sudo -u ubuntu /opt/realty-bot/.venv/bin/pip install --quiet -r /opt/realty-bot/requirements.txt
+      cp /opt/realty-bot/deploy/realty-bot.service /etc/systemd/system/realty-bot.service
+      systemctl daemon-reload
+      systemctl enable --now realty-bot
+runcmd:
+  - [bash, -c, "/usr/local/sbin/realty-bot-install.sh > /var/log/realty-bot-install.log 2>&1"]

@@ -1,0 +1,11 @@
+{
+  "user_id": 9252610,
+  "cookies_file": "cookies.txt",
+  "commission": 5,
+  "offer_type_label": "від посередника",
+  "append_article": true,
+  "max_photos": 50,
+  "default_tags": [],
+  "default_commercial_object_type": 1974,
+  "pause_between_photos": 0.4
+}

@@ -1,0 +1,26 @@
+{
+  "domria": {
+    "title": "dom.ria",
+    "dir": "boards/domria",
+    "entry": "run.py",
+    "enabled": true,
+    "needs_techpassport": true,
+    "timeout_min": 25
+  },
+  "rieltor": {
+    "title": "rieltor.ua",
+    "dir": "boards/rieltor",
+    "entry": "run.py",
+    "enabled": true,
+    "needs_techpassport": false,
+    "timeout_min": 25
+  },
+  "olx": {
+    "title": "OLX",
+    "dir": "boards/olx",
+    "entry": "run.py",
+    "enabled": false,
+    "needs_techpassport": false,
+    "timeout_min": 25
+  }
+}

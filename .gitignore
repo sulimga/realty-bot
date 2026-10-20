@@ -1,0 +1,12 @@
+# секрети і дані живуть тільки на сервері, у /var/lib/realty-bot — сюди не потрапляють
+data/
+*.env
+cookies*.txt
+config.json
+logs/
+posted/
+runs/
+__pycache__/
+*.pyc
+.venv/
+*.pdf
