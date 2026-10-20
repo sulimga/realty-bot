@@ -32,6 +32,7 @@ import dispatcher as D  # noqa: E402
 DATA = D.DATA
 SECRETS = os.path.join(DATA, "secrets")
 OWNER_FILE = os.path.join(DATA, "owner.json")
+BATCH_PAUSE = 5          # пауза між оголошеннями в пакеті, сек
 STARTED_AT = time.time()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -99,8 +100,8 @@ def reset(ctx):
 class LiveLog:
     """Одне повідомлення, що оновлюється останніми рядками (замість десятків повідомлень)."""
 
-    def __init__(self, bot, chat_id, title):
-        self.bot, self.chat_id, self.title = bot, chat_id, title
+    def __init__(self, bot, chat_id, title, quiet=False):
+        self.bot, self.chat_id, self.title, self.quiet = bot, chat_id, title, quiet
         self.lines, self.msg, self.last_edit = [], None, 0.0
 
     async def add(self, text):
@@ -115,7 +116,8 @@ class LiveLog:
         text = f"{self.title}\n<pre>{esc(cut(body, 3300))}</pre>" if body else self.title
         try:
             if self.msg is None:
-                self.msg = await self.bot.send_message(self.chat_id, text, parse_mode=ParseMode.HTML)
+                self.msg = await self.bot.send_message(self.chat_id, text, parse_mode=ParseMode.HTML,
+                                                       disable_notification=self.quiet)
             else:
                 await self.msg.edit_text(text, parse_mode=ParseMode.HTML)
         except BadRequest:
@@ -148,9 +150,9 @@ async def ask_user(ctx, chat_id, msg):
         ctx.application.bot_data.pop("pending_ask", None)
 
 
-async def run_board(ctx, chat_id, board_key, argv):
+async def run_board(ctx, chat_id, board_key, argv, quiet=False):
     b = D.boards(enabled_only=False)[board_key]
-    live = LiveLog(ctx.bot, chat_id, f"▶️ <b>{esc(b['title'])}</b>")
+    live = LiveLog(ctx.bot, chat_id, f"▶️ <b>{esc(b['title'])}</b>", quiet=quiet)
     await live.flush()
 
     async def on_info(text):
@@ -170,7 +172,8 @@ async def run_board(ctx, chat_id, board_key, argv):
     text = f"{icon} {esc(cut(res.get('text'), 3000))}"
     if res.get("url"):
         text += f"\n{esc(res['url'])}"
-    await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                               disable_notification=quiet)
     return res
 
 
@@ -199,7 +202,12 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pa = ctx.application.bot_data.get("pending_ask")
     if pa and not pa["future"].done():
         pa["future"].set_result({})
+    batch = ctx.application.bot_data.get("batch")
     reset(ctx)
+    if batch:
+        batch["stop"] = True
+        return await update.message.reply_text(f"⏹ Пакет зупиниться після поточного оголошення "
+                                               f"({batch['i']}/{batch['n']}).", reply_markup=MENU)
     await update.message.reply_text("Скасовано.", reply_markup=MENU)
 
 
@@ -255,6 +263,10 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mt = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
         when = time.strftime("%d.%m %H:%M", time.localtime(max(mt))) if mt else "—"
         lines.append(f"  {b['title']}: {'оновлено ' + when if when != '—' else 'немає'}")
+    batch = ctx.application.bot_data.get("batch")
+    if batch:
+        mins = int(time.time() - batch["started"]) // 60
+        lines += ["", f"📦 Іде пакет rieltor: {batch['i']}/{batch['n']}, успішно {batch['ok']} ({mins} хв)"]
     j = D.last_journal(8)
     if j:
         lines += ["", "Останні дії:"]
@@ -289,20 +301,106 @@ def boards_keyboard(selected):
 
 async def start_post(update, ctx):
     reset(ctx)
-    st(ctx)["mode"] = "await_url"
-    await update.message.reply_text("Надішліть посилання на презентацію об'єкта з CRM.")
+    st(ctx).update({"mode": "choose_boards_first", "selected": []})
+    await update.message.reply_text("Куди викласти?", reply_markup=boards_keyboard([]))
+
+
+URL_RE = re.compile(r"https?://[^\s,;]+")
+
+
+def extract_urls(text):
+    return list(dict.fromkeys(u.rstrip(").]'\"") for u in URL_RE.findall(text or "")))
+
+
+async def ask_links(chat_id, ctx):
+    s = st(ctx)
+    if s["selected"] == ["rieltor"]:
+        s["mode"] = "await_urls_batch"
+        return await ctx.bot.send_message(
+            chat_id, "Надішліть посилання з CRM: одне, кілька (через кому або кожне з нового рядка) "
+                     "або .txt файл зі списком — тоді бот викладатиме їх по черзі сам.")
+    s["mode"] = "await_url"
+    await ctx.bot.send_message(chat_id, "Надішліть посилання на презентацію об'єкта з CRM.")
+
+
+async def got_urls_batch(chat_id, ctx, urls):
+    s = st(ctx)
+    if not urls:
+        return await ctx.bot.send_message(chat_id, "Не знайшов жодного посилання. Надішліть ще раз або /cancel")
+    if len(urls) == 1:
+        s["mode"] = "await_url"
+        return await got_url_chat(chat_id, ctx, urls[0])
+    s.update({"mode": "confirm_batch", "batch_urls": urls})
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🚀 Запустити ({len(urls)})", callback_data="batch_go")],
+                               [InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")]])
+    await ctx.bot.send_message(
+        chat_id, f"Пакет для rieltor.ua: <b>{len(urls)}</b> оголошень, по черзі з паузою.\n"
+                 "Питань під час пакета не буде: якщо чогось бракує (напр. площі ділянки), оголошення "
+                 "пропускається і потрапить у підсумок. Зупинити — /cancel (після поточного оголошення).",
+        parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def run_batch(ctx, chat_id, urls):
+    bd = ctx.application.bot_data
+    bd["busy"] = True
+    batch = bd["batch"] = {"n": len(urls), "i": 0, "ok": 0, "stop": False, "started": time.time()}
+    failed, stopped_reason = [], None
+    try:
+        for i, url in enumerate(urls, 1):
+            if batch["stop"]:
+                stopped_reason = "зупинено командою /cancel"
+                break
+            batch["i"] = i
+            await ctx.bot.send_message(chat_id, f"📦 {i}/{len(urls)}", disable_notification=True)
+            res = await run_board(ctx, chat_id, "rieltor", ["post", "--url", url, "--no-ask"], quiet=True)
+            if res.get("ok"):
+                batch["ok"] += 1
+            else:
+                failed.append((url, res.get("text") or ""))
+            if res.get("stop_batch"):
+                stopped_reason = res.get("text")
+                break
+            if i < len(urls):
+                await asyncio.sleep(BATCH_PAUSE)
+    except Exception as e:  # noqa: BLE001
+        log.exception("batch")
+        stopped_reason = f"помилка бота: {e}"
+    finally:
+        bd["busy"] = False
+        bd.pop("batch", None)
+    lines = [f"📦 Пакет rieltor завершено: ✅ {batch['ok']} з {len(urls)}"]
+    if stopped_reason:
+        rest = urls[batch["i"]:]
+        lines.append(f"⛔ Зупинено: {cut(stopped_reason, 300)}")
+        if rest:
+            lines.append(f"Не оброблено ({len(rest)}):\n" + "\n".join(rest))
+    if failed:
+        lines.append(f"❌ З помилкою ({len(failed)}):")
+        lines += [f"• {u}\n  {cut(t, 160)}" for u, t in failed]
+    await ctx.bot.send_message(chat_id, cut("\n".join(lines), 4000), disable_web_page_preview=True,
+                               reply_markup=MENU)
 
 
 async def got_url(update, ctx, url):
+    return await got_url_chat(update.effective_chat.id, ctx, url)
+
+
+async def got_url_chat(chat_id, ctx, url):
     s = st(ctx)
-    msg = await update.message.reply_text("🔎 Читаю презентацію…")
+    msg = await ctx.bot.send_message(chat_id, "🔎 Читаю презентацію…")
     try:
         estate, summary = await asyncio.to_thread(crm_summary, url)
     except Exception as e:  # noqa: BLE001
         await msg.edit_text(f"❌ Не вдалося прочитати презентацію: {e}\nНадішліть інше посилання або /cancel")
         return
-    s.update({"mode": "choose_boards", "url": url, "summary": summary, "selected": [],
-              "article": estate.get("article")})
+    pre = s.get("selected") or []
+    s.update({"url": url, "summary": summary, "article": estate.get("article")})
+    if pre:                                   # сайти вже обрано на першому кроці
+        await msg.edit_text(summary, parse_mode=ParseMode.HTML)
+        if any(D.boards()[k].get("needs_techpassport") for k in pre):
+            return await ask_techpassport(chat_id, ctx)
+        return await confirm_publish(chat_id, ctx)
+    s.update({"mode": "choose_boards", "selected": []})
     await msg.edit_text(f"{summary}\n\nКуди викласти?", parse_mode=ParseMode.HTML,
                         reply_markup=boards_keyboard([]))
 
@@ -430,6 +528,10 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pa = ctx.application.bot_data.get("pending_ask")
 
     if text == BTN_POST:
+        if ctx.application.bot_data.get("batch"):
+            b = ctx.application.bot_data["batch"]
+            return await update.message.reply_text(f"Зараз іде пакет rieltor ({b['i']}/{b['n']}). "
+                                                   "Дочекайтесь або зупиніть: /cancel")
         return await start_post(update, ctx)
     if text == BTN_TP:
         return await start_tp(update, ctx)
@@ -449,6 +551,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("Оберіть варіант кнопкою вище або «Пропустити».")
 
     mode = s.get("mode")
+    if mode == "await_urls_batch":
+        return await got_urls_batch(update.effective_chat.id, ctx, extract_urls(text))
     if mode == "await_url":
         m = re.search(r"https?://\S+", text)
         if not m:
@@ -473,9 +577,20 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
     s = st(ctx)
+    msg = update.message
+    if s.get("mode") == "await_urls_batch" and msg.document:
+        if msg.document.file_size and msg.document.file_size > 2_000_000:
+            return await msg.reply_text("Завеликий файл для списку посилань.")
+        raw = bytes(await (await msg.document.get_file()).download_as_bytearray())
+        for enc in ("utf-8-sig", "cp1251", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        return await got_urls_batch(update.effective_chat.id, ctx, extract_urls(text))
     if s.get("mode") != "await_files":
         return await update.message.reply_text("Файл зараз не очікується. Спершу оберіть дію в меню.")
-    msg = update.message
     if msg.document:
         tg_file = await msg.document.get_file()
         name = msg.document.file_name or f"file_{len(s['files']) + 1}"
@@ -524,7 +639,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
         return await ctx.bot.send_message(chat_id, "Скасовано.", reply_markup=MENU)
 
-    if data.startswith("tg:") and s.get("mode") == "choose_boards":
+    if data.startswith("tg:") and s.get("mode") in ("choose_boards", "choose_boards_first"):
         key = data[3:]
         sel = s["selected"]
         sel.remove(key) if key in sel else sel.append(key)
@@ -533,6 +648,25 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except BadRequest:
             pass
         return
+
+    if data == "boards_next" and s.get("mode") == "choose_boards_first":
+        if not s["selected"]:
+            return await ctx.bot.send_message(chat_id, "Позначте хоча б один сайт.")
+        await q.edit_message_reply_markup(None)
+        names = ", ".join(D.boards()[k]["title"] for k in s["selected"])
+        await ctx.bot.send_message(chat_id, f"Куди: <b>{esc(names)}</b>", parse_mode=ParseMode.HTML)
+        return await ask_links(chat_id, ctx)
+
+    if data == "batch_go" and s.get("mode") == "confirm_batch":
+        if ctx.application.bot_data.get("busy"):
+            return await ctx.bot.send_message(chat_id, "Зачекайте, іде інша дія.")
+        await q.edit_message_reply_markup(None)
+        urls = s["batch_urls"]
+        reset(ctx)
+        ctx.application.bot_data["busy"] = True          # одразу, щоб не запустити двічі
+        ctx.application.create_task(run_batch(ctx, chat_id, urls))
+        return await ctx.bot.send_message(chat_id, f"▶️ Пакет запущено: {len(urls)} оголошень. "
+                                                   "Прогрес — «ℹ️ Статус».", reply_markup=MENU)
 
     if data == "boards_next" and s.get("mode") == "choose_boards":
         if not s["selected"]:

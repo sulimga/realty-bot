@@ -1,7 +1,7 @@
 """
 rieltor.ua — точка входу для диспетчера (протокол: common/board_protocol.py).
 
-    python run.py post --url <посилання CRM>
+    python run.py post --url <посилання CRM> [--no-ask]
     python run.py refresh          # оновити дати актуальності всіх активних оголошень
     python run.py check
 
@@ -28,7 +28,7 @@ bp.install_print_hook()
 import crm_to_rieltor_payload as R  # noqa: E402
 from extract_estate import fetch_estate_data  # noqa: E402
 from rieltor_geo import RieltorGeoClient  # noqa: E402
-from rieltor_photos import upload_photos  # noqa: E402
+from rieltor_photos import RateLimitExhausted, upload_photos  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 COOKIES = os.path.join(DATA, "secrets", "rieltor_cookies.txt")
@@ -78,6 +78,10 @@ def cmd_post(a):
 
     # Продаж будинку без площі ділянки — rieltor.ua не прийме: питаємо
     if payload.get("itemType") == 3 and payload.get("operType") == 1 and not payload.get("groundArea"):
+        if a.no_ask:
+            bp.result(False, f"rieltor: {crm.get('article') or ''} продаж будинку без площі ділянки в CRM — "
+                             f"пропущено (викладіть його окремо, бот спитає площу)")
+            return
         while True:
             v = bp.ask_text("Площа ділянки (соток) — у CRM немає, rieltor.ua вимагає для продажу будинку")
             if v is None:
@@ -121,7 +125,7 @@ def cmd_post(a):
         bp.result(True, "rieltor: опубліковано" + (f" (№ {offer_id})" if offer_id else "") +
                   ". Перевірте в кабінеті rieltor.ua → Оголошення", id=offer_id)
     elif resp.status_code in (401, 403):
-        bp.result(False, "rieltor: cookie застаріли. Оновіть: кнопка «🍪 Cookies» → rieltor")
+        bp.result(False, "rieltor: cookie застаріли. Оновіть: кнопка «🍪 Cookies» → rieltor", stop_batch=True)
     else:
         bp.result(False, f"rieltor: сервер повернув помилку {resp.status_code}: {str(body)[:500]}")
 
@@ -155,17 +159,20 @@ def main():
     p = sub.add_parser("post")
     p.add_argument("--url", required=True)
     p.add_argument("--techpassport", nargs="*", default=[])   # rieltor не потребує — ігноруємо
+    p.add_argument("--no-ask", action="store_true")            # пакетний режим: нічого не питати
     sub.add_parser("refresh")
     sub.add_parser("check")
     a = ap.parse_args()
     try:
         {"post": cmd_post, "refresh": cmd_refresh, "check": cmd_check}[a.cmd](a)
     except CookieMissing as e:
-        bp.result(False, f"rieltor: {e}")
+        bp.result(False, f"rieltor: {e}", stop_batch=True)
+    except RateLimitExhausted as e:
+        bp.result(False, f"rieltor: {e}", stop_batch=True)
     except requests.HTTPError as e:
         code = getattr(e.response, "status_code", "")
         hint = " — схоже, cookie застаріли (кнопка «🍪 Cookies» → rieltor)" if code in (401, 403) else ""
-        bp.result(False, f"rieltor: помилка HTTP {code}{hint}")
+        bp.result(False, f"rieltor: помилка HTTP {code}{hint}", stop_batch=code in (401, 403))
     except BaseException as e:  # noqa: BLE001
         bp.info(traceback.format_exc()[-1500:])
         bp.result(False, f"rieltor: непередбачена помилка {type(e).__name__}: {e}")
