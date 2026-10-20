@@ -19,7 +19,7 @@
     "title": "OLX",
     "dir": "boards/olx",
     "entry": "run.py",
-    "enabled": false,
+    "enabled": true,
     "needs_techpassport": false,
     "timeout_min": 25
   }
