@@ -21,6 +21,7 @@
     "entry": "run.py",
     "enabled": true,
     "needs_techpassport": false,
-    "timeout_min": 25
+    "timeout_min": 25,
+    "cookie_hint": "OLX входить не через cookie, а через токен (рядок Authorization).\nДе взяти: у Chrome відкрийте olx.ua (залогіненим) → F12 → Network → оновіть сторінку → у фільтрі напишіть api → клікніть запит до www.olx.ua/api/v1/… (наприклад users/me) → Request Headers → authorization → скопіюйте значення «Bearer eyJ…» і надішліть сюди.\nОкремим разом (знову через «🍪 Cookies» → OLX) можна надіслати й cookie — тоді я спробую сам оновлювати токен, коли він протухне.\nПовідомлення я одразу видалю з чату."
   }
 }

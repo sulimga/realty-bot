@@ -1,10 +1,7 @@
 """
 Клієнт OLX (posting-services + www.olx.ua/api). Знято з HAR форми подачі оголошення.
 
-Авторизація: веб-версія OLX шле `Authorization: Bearer <access_token>`, де access_token —
-JWT із cookie `access_token` (той самий, що в браузері). Він живе недовго, тому
-при 401 пробуємо оновити його запитом сторінки кабінету з cookie (сайт сам видає новий
-access_token у Set-Cookie); якщо не вийшло — просимо оновити cookie.
+Авторизація: AWS Cognito. Браузер шле `Authorization: Bearer <JWT access token>` (див. OlxClient).
 
 Фото: POST /api/v1/apollo/token/ -> {"token"} ;
       POST https://ireland.apollo.olxcdn.com/v1/temp-files  (тіло — JPEG,
@@ -15,6 +12,7 @@ access_token у Set-Cookie); якщо не вийшло — просимо он�
 import base64
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -38,34 +36,73 @@ class AuthError(OlxError):
     pass
 
 
+JWT_RE = re.compile(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+")
+
+
 def parse_cookie_string(raw):
-    raw = (raw or "").strip()
-    if raw.lower().startswith("cookie:"):
-        raw = raw.split(":", 1)[1].strip()
+    """Cookie з тексту: «a=1; b=2», з/без «cookie:», рядок Authorization ігнорується."""
     out = {}
-    for part in raw.split(";"):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            out[k.strip()] = v.strip()
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        low = line.lower()
+        if not line or low.startswith("authorization") or low.startswith("bearer"):
+            continue
+        if low.startswith("cookie:"):
+            line = line.split(":", 1)[1]
+        for part in line.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k.strip() and " " not in k.strip():
+                    out[k.strip()] = v.strip()
     return out
+
+
+def find_jwts(raw):
+    return JWT_RE.findall(raw or "")
+
+
+def jwt_claims(token):
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def jwt_exp(token):
     """Час закінчення JWT (unix) або None."""
-    try:
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        return int(json.loads(base64.urlsafe_b64decode(payload)).get("exp"))
-    except Exception:  # noqa: BLE001
-        return None
+    exp = jwt_claims(token or "").get("exp")
+    return int(exp) if exp else None
+
+
+def _read(path):
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    return ""
 
 
 class OlxClient:
-    def __init__(self, cookie_path, device_id, log_dir=None):
+    """
+    Авторизація OLX — AWS Cognito: браузер шле `Authorization: Bearer <JWT>` (живе ~1 год).
+    Токен беремо з будь-якого з двох файлів (що свіжіший):
+      olx_auth.txt    — надісланий рядок Authorization (Bearer …)
+      olx_cookies.txt — cookie (якщо в них є токен: access_token / a_access_token / рядок Bearer)
+    Коли токен прострочений — пробуємо оновити (Cognito refresh token з cookie, або кабінет сайту).
+    """
+    TOKEN_COOKIES = ("access_token", "a_access_token", "accessToken")
+
+    def __init__(self, cookie_path, device_id, log_dir=None, auth_path=None):
         self.cookie_path = cookie_path
+        self.auth_path = auth_path
         self.device_id = device_id
         self.log_dir = log_dir
-        self.cookies = parse_cookie_string(open(cookie_path, encoding="utf-8").read()) if cookie_path else {}
+        raw_c, raw_a = _read(cookie_path), _read(auth_path)
+        self.cookies = parse_cookie_string(raw_c)
+        cands = find_jwts(raw_a) + find_jwts(raw_c) + [self.cookies[k] for k in self.TOKEN_COOKIES if k in self.cookies]
+        cands = [t for t in cands if jwt_claims(t).get("token_use", "access") != "id"] or cands
+        self.token = max(cands, key=lambda t: jwt_exp(t) or 0) if cands else None
         self.s = requests.Session()
         retry = Retry(total=3, backoff_factor=1.5, status_forcelist=(502, 503, 504),
                       allowed_methods=frozenset(["GET"]))
@@ -76,11 +113,18 @@ class OlxClient:
     # ------------------------------------------------------------ службове
     @property
     def access_token(self):
-        return self.cookies.get("access_token")
+        return self.token
 
     def token_expires_in(self):
-        exp = jwt_exp(self.access_token or "")
+        exp = jwt_exp(self.token or "")
         return None if exp is None else exp - int(time.time())
+
+    def describe(self):
+        """Без секретів: назви cookie і поля токена — для діагностики."""
+        c = jwt_claims(self.token or "")
+        return {"cookie_names": sorted(self.cookies.keys()),
+                "token": {k: c.get(k) for k in ("iss", "client_id", "token_use", "scope", "exp")} if c else None,
+                "expires_in": self.token_expires_in()}
 
     def _log(self, step, method, url, status, req=None, resp=None):
         if not self.log_dir:
@@ -97,14 +141,16 @@ class OlxClient:
     def _h_www(self, auth=True):
         h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "uk", "version": "v1.19",
              "x-client": "DESKTOP", "x-platform-type": "mobile-html5", "x-device-id": self.device_id,
-             "Origin": WWW, "Referer": WWW + "/d/uk/adding/", "Cookie": self._cookie_header()}
-        if auth and self.access_token:
-            h["Authorization"] = f"Bearer {self.access_token}"
+             "Origin": WWW, "Referer": WWW + "/d/uk/adding/"}
+        if self.cookies:
+            h["Cookie"] = self._cookie_header()
+        if auth and self.token:
+            h["Authorization"] = f"Bearer {self.token}"
         return h
 
     def _h_posting(self, posting_id):
         return {"User-Agent": UA, "Accept": "*/*", "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.access_token}", "postingid": posting_id,
+                "Authorization": f"Bearer {self.token}", "postingid": posting_id,
                 "x-client": "DESKTOP", "x-platform": "d", "x-platform-type": "mobile-html5",
                 "Origin": WWW, "Referer": WWW + "/"}
 
@@ -115,33 +161,71 @@ class OlxClient:
         except ValueError:
             return r.text[:2000]
 
-    def _save_cookies(self):
-        with open(self.cookie_path, "w", encoding="utf-8") as f:
-            f.write(self._cookie_header())
-        try:
-            os.chmod(self.cookie_path, 0o600)
-        except OSError:
-            pass
+    def _save_token(self, token):
+        self.token = token
+        if self.auth_path:
+            with open(self.auth_path, "w", encoding="utf-8") as f:
+                f.write("Authorization: Bearer " + token)
+            try:
+                os.chmod(self.auth_path, 0o600)
+            except OSError:
+                pass
 
-    def try_refresh(self):
-        """Відкрити кабінет з cookie: якщо сайт видасть новий access_token — зберегти."""
-        old = self.access_token
+    def _refresh_cognito(self):
+        c = jwt_claims(self.token or "")
+        iss, client_id = c.get("iss") or "", c.get("client_id")
+        refresh = next((v for k, v in self.cookies.items() if "refresh" in k.lower() and len(v) > 100), None)
+        if "cognito-idp." not in iss or not client_id or not refresh:
+            self._log("refresh_cognito", "-", "-", None,
+                      resp={"skip": True, "iss": iss, "client_id": bool(client_id), "refresh_cookie": bool(refresh)})
+            return False
+        region = iss.split("cognito-idp.")[1].split(".")[0]
+        r = self.s.post(f"https://cognito-idp.{region}.amazonaws.com/", timeout=40,
+                        headers={"Content-Type": "application/x-amz-json-1.1",
+                                 "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"},
+                        data=json.dumps({"AuthFlow": "REFRESH_TOKEN_AUTH", "ClientId": client_id,
+                                         "AuthParameters": {"REFRESH_TOKEN": refresh}}))
+        body = self._body(r)
+        tok = ((body or {}).get("AuthenticationResult") or {}).get("AccessToken") if isinstance(body, dict) else None
+        self._log("refresh_cognito", "POST", "cognito InitiateAuth", r.status_code,
+                  resp={"ok": bool(tok), "err": None if tok else str(body)[:300]})
+        if tok:
+            self._save_token(tok)
+            return True
+        return False
+
+    def _refresh_site(self):
+        if not self.cookies:
+            return False
         try:
             r = self.s.get(WWW + "/uk/myaccount/", headers={"User-Agent": UA, "Cookie": self._cookie_header()},
                            timeout=40, allow_redirects=True)
         except requests.RequestException:
             return False
-        got = {c.name: c.value for c in r.cookies} if r.cookies else {}
+        got = {}
         for resp in list(r.history) + [r]:
             for c in resp.cookies:
                 got[c.name] = c.value
-        self._log("refresh", "GET", "/uk/myaccount/", r.status_code,
-                  resp={"new_cookies": sorted(got.keys())})
-        if got.get("access_token") and got["access_token"] != old:
-            self.cookies.update(got)
-            self._save_cookies()
+        self._log("refresh_site", "GET", "/uk/myaccount/", r.status_code, resp={"new_cookies": sorted(got)})
+        new = [got[k] for k in self.TOKEN_COOKIES if got.get(k)] + find_jwts(r.text[:200000])
+        new = [t for t in new if t != self.token and (jwt_exp(t) or 0) > (jwt_exp(self.token or "") or 0)]
+        if new:
+            self._save_token(max(new, key=lambda t: jwt_exp(t) or 0))
             return True
         return False
+
+    def try_refresh(self):
+        try:
+            return self._refresh_cognito() or self._refresh_site()
+        except requests.RequestException:
+            return False
+
+    def ensure_token(self):
+        if not self.token:
+            raise AuthError("немає токена авторизації (рядок Authorization: Bearer …)")
+        left = self.token_expires_in()
+        if left is not None and left < 120 and not self.try_refresh():
+            raise AuthError("токен авторизації прострочений, оновити автоматично не вдалося")
 
     def _request(self, step, method, url, headers_fn, retry_auth=True, **kw):
         r = self.s.request(method, url, headers=headers_fn(), timeout=kw.pop("timeout", 60), **kw)
@@ -155,7 +239,8 @@ class OlxClient:
         body = self._body(r)
         self._log("me", "GET", "/api/v1/users/me/", r.status_code, resp=body)
         if r.status_code in (401, 403):
-            raise AuthError(f"OLX не впізнав користувача (HTTP {r.status_code})")
+            hint = str(body)[:200].replace("\n", " ")
+            raise AuthError(f"OLX не впізнав користувача (HTTP {r.status_code}, server={r.headers.get('server')}): {hint}")
         if r.status_code >= 400:
             raise OlxError(f"users/me: HTTP {r.status_code} {str(body)[:300]}")
         return body.get("data", body) if isinstance(body, dict) else {}

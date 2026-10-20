@@ -251,8 +251,9 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = [f"Версія коду: {ver or '?'}", f"Працює: {up // 3600} год {up % 3600 // 60} хв", "",
              "Cookie:"]
     for key, b in D.boards().items():
-        path = os.path.join(SECRETS, f"{key}_cookies.txt")
-        when = time.strftime("%d.%m %H:%M", time.localtime(os.path.getmtime(path))) if os.path.exists(path) else "—"
+        paths = [os.path.join(SECRETS, f"{key}_{n}.txt") for n in ("cookies", "auth")]
+        mt = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
+        when = time.strftime("%d.%m %H:%M", time.localtime(max(mt))) if mt else "—"
         lines.append(f"  {b['title']}: {'оновлено ' + when if when != '—' else 'немає'}")
     j = D.last_journal(8)
     if j:
@@ -389,19 +390,34 @@ async def start_cookies(update, ctx):
 async def save_cookie(update, ctx, board_key, text):
     os.makedirs(SECRETS, exist_ok=True)
     os.chmod(SECRETS, 0o700)
-    path = os.path.join(SECRETS, f"{board_key}_cookies.txt")
     raw = text.strip()
     if raw.lower().startswith("cookie:"):
         raw = raw.split(":", 1)[1].strip()
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(raw)
-    os.chmod(path, 0o600)
+    # Рядок «Authorization: Bearer <JWT>» (OLX) зберігаємо окремо, щоб не затерти cookie і навпаки
+    jwt = re.search(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+", raw)
+    pairs = len(re.findall(r"[\w.-]+=[^;\s]*", re.sub(r"eyJ[\w.-]+", "", raw)))
+    saved = []
+    if jwt and ("bearer" in raw.lower() or "authorization" in raw.lower() or pairs < 3):
+        p = os.path.join(SECRETS, f"{board_key}_auth.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("Authorization: Bearer " + jwt.group(0))
+        os.chmod(p, 0o600)
+        saved.append("токен")
+    if pairs >= 3:
+        p = os.path.join(SECRETS, f"{board_key}_cookies.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("\n".join(l for l in raw.splitlines() if "bearer" not in l.lower()
+                              and not l.lower().startswith("authorization")))
+        os.chmod(p, 0o600)
+        saved.append("cookie")
     try:
         await update.message.delete()          # не тримаємо cookie в історії чату
     except BadRequest:
         pass
     reset(ctx)
-    await ctx.bot.send_message(update.effective_chat.id, "🍪 Збережено, перевіряю…")
+    if not saved:
+        return await ctx.bot.send_message(update.effective_chat.id, "Не схоже ні на cookie, ні на Authorization — нічого не зберіг.")
+    await ctx.bot.send_message(update.effective_chat.id, f"🍪 Збережено ({' і '.join(saved)}), перевіряю…")
     await run_board(ctx, update.effective_chat.id, board_key, ["check"])
 
 
@@ -566,10 +582,11 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         s["mode"] = f"await_cookie:{key}"
         await q.edit_message_reply_markup(None)
         return await ctx.bot.send_message(
-            chat_id, f"Надішліть cookie для {D.boards()[key]['title']} одним повідомленням.\n"
+            chat_id, D.boards()[key].get("cookie_hint") or (
+                     f"Надішліть cookie для {D.boards()[key]['title']} одним повідомленням.\n"
                      "Де взяти: у Chrome відкрийте сайт (залогіненим) → F12 → Network → оновіть сторінку → "
                      "будь-який запит до сайту → Request Headers → cookie → скопіюйте значення.\n"
-                     "Повідомлення з cookie я одразу видалю з чату.")
+                     "Повідомлення з cookie я одразу видалю з чату."))
 
 
 async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):

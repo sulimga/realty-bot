@@ -37,6 +37,7 @@ from olx_client import AuthError, OlxClient, OlxError  # noqa: E402
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 BOARD_DIR = os.path.join(DATA, "olx")
 COOKIES = os.path.join(DATA, "secrets", "olx_cookies.txt")
+AUTH = os.path.join(DATA, "secrets", "olx_auth.txt")
 CONFIG = os.path.join(BOARD_DIR, "config.json")
 os.makedirs(BOARD_DIR, exist_ok=True)
 
@@ -70,12 +71,11 @@ def save_cfg(cfg):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
-def make_client(cfg):
-    if not os.path.exists(COOKIES) or not open(COOKIES, encoding="utf-8").read().strip():
-        raise OlxError("немає cookie. Додайте їх: кнопка «🍪 Cookies» → OLX")
-    c = OlxClient(COOKIES, cfg["device_id"], log_dir=os.path.join(BOARD_DIR, "logs"))
-    if not c.access_token:
-        raise AuthError("у cookie немає access_token (скопіюйте cookie з залогіненої сторінки olx.ua)")
+def make_client(cfg, check_token=True):
+    c = OlxClient(COOKIES if os.path.exists(COOKIES) else None, cfg["device_id"],
+                  log_dir=os.path.join(BOARD_DIR, "logs"), auth_path=AUTH)
+    if check_token:
+        c.ensure_token()
     return c
 
 
@@ -445,15 +445,27 @@ def cmd_post(a):
 
 def cmd_check(a):
     cfg = load_cfg()
-    client = make_client(cfg)
+    client = make_client(cfg, check_token=False)
+    d = client.describe()
+    names = d["cookie_names"]
+    keyish = [n for n in names if any(x in n.lower() for x in ("token", "refresh", "auth", "session", "sid"))]
+    print(f"Cookie: {len(names)} шт." + (f" (з них про вхід: {', '.join(keyish)})" if keyish else ""))
+    if d["token"]:
+        t = d["token"]
+        print(f"Токен: {t.get('token_use') or '?'}, видавець {str(t.get('iss') or '?').split('//')[-1]}, "
+              f"дійсний ще {fmt_left(d['expires_in'])}")
+    else:
+        print("Токена (Authorization: Bearer …) не знайшов")
+    client.ensure_token()
     me = client.me()
     who = me.get("email") or me.get("name") or me.get("id") or "?"
-    bp.result(True, f"OLX: cookie робочі ({who}). Токен дійсний ще: {fmt_left(client.token_expires_in())}")
+    bp.result(True, f"OLX: вхід працює ({who}). Токен дійсний ще: {fmt_left(client.token_expires_in())}")
 
 
 def finish_error(e):
     if isinstance(e, AuthError):
-        bp.result(False, f"OLX: cookie застаріли ({e}). Оновіть їх: кнопка «🍪 Cookies» → OLX.")
+        bp.result(False, f"OLX: немає входу — {e}.\nОновіть: кнопка «🍪 Cookies» → OLX, надішліть рядок "
+                         f"Authorization (Bearer …) з будь-якого запиту до www.olx.ua/api/…")
     elif isinstance(e, requests.exceptions.RequestException):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")
     elif isinstance(e, (OlxError, SystemExit)):
