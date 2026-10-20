@@ -32,7 +32,7 @@ import board_protocol as bp  # noqa: E402
 bp.install_print_hook()
 
 import mapping as M  # noqa: E402
-from olx_client import AuthError, OlxClient, OlxError  # noqa: E402
+from olx_client import NET_ERRORS, AuthError, OlxClient, OlxError  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 BOARD_DIR = os.path.join(DATA, "olx")
@@ -452,10 +452,12 @@ def cmd_check(a):
     print(f"Cookie: {len(names)} шт." + (f" (з них про вхід: {', '.join(keyish)})" if keyish else ""))
     if d["token"]:
         t = d["token"]
-        print(f"Токен: {t.get('token_use') or '?'}, видавець {str(t.get('iss') or '?').split('//')[-1]}, "
+        print(f"Токен: {t.get('token_use') or '?'}, видавець {t.get('iss') or '?'}, "
               f"дійсний ще {fmt_left(d['expires_in'])}")
     else:
         print("Токена (Authorization: Bearer …) не знайшов")
+    print("Зв'язок із OLX: " + "; ".join(client.probe()))
+    print(f"Спосіб з'єднання: {client.engine}")
     client.ensure_token()
     me = client.me()
     who = me.get("email") or me.get("name") or me.get("id") or "?"
@@ -466,7 +468,7 @@ def finish_error(e):
     if isinstance(e, AuthError):
         bp.result(False, f"OLX: немає входу — {e}.\nОновіть: кнопка «🍪 Cookies» → OLX, надішліть рядок "
                          f"Authorization (Bearer …) з будь-якого запиту до www.olx.ua/api/…")
-    elif isinstance(e, requests.exceptions.RequestException):
+    elif isinstance(e, NET_ERRORS):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")
     elif isinstance(e, (OlxError, SystemExit)):
         bp.result(False, f"OLX: {e}")

@@ -21,11 +21,32 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+try:   # сайт OLX стоїть за CloudFront, який відсікає «не-браузерні» з'єднання (TLS-відбиток python)
+    from curl_cffi import requests as creq
+except ImportError:  # pragma: no cover
+    creq = None
+
+NET_ERRORS = (requests.RequestException,) + ((creq.exceptions.RequestException,) if creq else ())
+
+
+def new_session(engine="auto"):
+    if creq and engine in ("auto", "chrome"):
+        return creq.Session(impersonate="chrome")
+    s = requests.Session()
+    retry = Retry(total=3, backoff_factor=1.5, status_forcelist=(502, 503, 504), allowed_methods=frozenset(["GET"]))
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
 WWW = "https://www.olx.ua"
 POSTING = "https://posting-services.prd.01.eu-west-1.eu.olx.org"
 APOLLO = "https://ireland.apollo.olxcdn.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
+
+
+def _ua():
+    """З curl_cffi User-Agent ставить сама «імітація Chrome» (має збігатися з TLS-відбитком)."""
+    return {} if creq else {"User-Agent": UA}
 
 
 class OlxError(Exception):
@@ -103,10 +124,8 @@ class OlxClient:
         cands = find_jwts(raw_a) + find_jwts(raw_c) + [self.cookies[k] for k in self.TOKEN_COOKIES if k in self.cookies]
         cands = [t for t in cands if jwt_claims(t).get("token_use", "access") != "id"] or cands
         self.token = max(cands, key=lambda t: jwt_exp(t) or 0) if cands else None
-        self.s = requests.Session()
-        retry = Retry(total=3, backoff_factor=1.5, status_forcelist=(502, 503, 504),
-                      allowed_methods=frozenset(["GET"]))
-        self.s.mount("https://", HTTPAdapter(max_retries=retry))
+        self.s = new_session()
+        self.engine = "chrome" if creq else "python"
         self._apollo_token = None
         self._apollo_at = 0
 
@@ -139,7 +158,7 @@ class OlxClient:
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
     def _h_www(self, auth=True):
-        h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "uk", "version": "v1.19",
+        h = {**_ua(), "Accept": "*/*", "Accept-Language": "uk", "version": "v1.19",
              "x-client": "DESKTOP", "x-platform-type": "mobile-html5", "x-device-id": self.device_id,
              "Origin": WWW, "Referer": WWW + "/d/uk/adding/"}
         if self.cookies:
@@ -149,7 +168,7 @@ class OlxClient:
         return h
 
     def _h_posting(self, posting_id):
-        return {"User-Agent": UA, "Accept": "*/*", "Content-Type": "application/json",
+        return {**_ua(), "Accept": "*/*", "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.token}", "postingid": posting_id,
                 "x-client": "DESKTOP", "x-platform": "d", "x-platform-type": "mobile-html5",
                 "Origin": WWW, "Referer": WWW + "/"}
@@ -198,14 +217,16 @@ class OlxClient:
         if not self.cookies:
             return False
         try:
-            r = self.s.get(WWW + "/uk/myaccount/", headers={"User-Agent": UA, "Cookie": self._cookie_header()},
+            r = self.s.get(WWW + "/uk/myaccount/", headers={**_ua(), "Cookie": self._cookie_header()},
                            timeout=40, allow_redirects=True)
-        except requests.RequestException:
+        except NET_ERRORS:
             return False
         got = {}
-        for resp in list(r.history) + [r]:
-            for c in resp.cookies:
-                got[c.name] = c.value
+        for resp in list(getattr(r, "history", None) or []) + [r]:
+            try:
+                got.update(dict(resp.cookies))
+            except Exception:  # noqa: BLE001
+                pass
         self._log("refresh_site", "GET", "/uk/myaccount/", r.status_code, resp={"new_cookies": sorted(got)})
         new = [got[k] for k in self.TOKEN_COOKIES if got.get(k)] + find_jwts(r.text[:200000])
         new = [t for t in new if t != self.token and (jwt_exp(t) or 0) > (jwt_exp(self.token or "") or 0)]
@@ -217,7 +238,7 @@ class OlxClient:
     def try_refresh(self):
         try:
             return self._refresh_cognito() or self._refresh_site()
-        except requests.RequestException:
+        except NET_ERRORS:
             return False
 
     def ensure_token(self):
@@ -232,6 +253,22 @@ class OlxClient:
         if r.status_code == 401 and retry_auth and self.try_refresh():
             r = self.s.request(method, url, headers=headers_fn(), timeout=60, **kw)
         return r
+
+    def probe(self):
+        """Доступність сайтів OLX із цього сервера (публічні адреси, без входу)."""
+        tests = [("www.olx.ua", WWW + "/api/v1/geo-encoder/location-autocomplete/?query=%D0%9A%D0%B8%D1%97%D0%B2&limit=1&scope=posting"),
+                 ("posting-services", POSTING + "/v2/categories?categoryID=1602&brand=olxua&language=uk")]
+        out = []
+        engines = (["chrome"] if creq else []) + ["python"]
+        for eng in engines:
+            ses = new_session(eng)
+            for name, url in tests:
+                try:
+                    r = ses.get(url, headers={} if eng == "chrome" else {"User-Agent": UA}, timeout=30)
+                    out.append(f"{name} ({eng}): HTTP {r.status_code}")
+                except Exception as e:  # noqa: BLE001
+                    out.append(f"{name} ({eng}): {type(e).__name__}")
+        return out
 
     # ------------------------------------------------------------ перевірка
     def me(self):
@@ -285,7 +322,7 @@ class OlxClient:
             tok = self.apollo_token(fresh=attempt == 2)
             expires = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             r = self.s.post(APOLLO + "/v1/temp-files", data=data, timeout=120,
-                            headers={"User-Agent": UA, "Authorization": f"Bearer {tok}",
+                            headers={**_ua(), "Authorization": f"Bearer {tok}",
                                      "Content-Type": content_type, "Expires": expires,
                                      "Origin": WWW, "Referer": WWW + "/"})
             body = self._body(r)
