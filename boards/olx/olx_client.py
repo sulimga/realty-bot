@@ -121,9 +121,19 @@ class OlxClient:
         self.log_dir = log_dir
         raw_c, raw_a = _read(cookie_path), _read(auth_path)
         self.cookies = parse_cookie_string(raw_c)
-        cands = find_jwts(raw_a) + find_jwts(raw_c) + [self.cookies[k] for k in self.TOKEN_COOKIES if k in self.cookies]
-        cands = [t for t in cands if jwt_claims(t).get("token_use", "access") != "id"] or cands
-        self.token = max(cands, key=lambda t: jwt_exp(t) or 0) if cands else None
+        # Пріоритет: надісланий рядок Authorization -> Bearer у тексті cookie -> cookie access_token.
+        # (cookie access_token — інший токен сайту, для API він «invalid_token»; лише як запасний варіант)
+        self.token, self.token_source = None, None
+        now = time.time()
+        for src, toks in (("Authorization", find_jwts(raw_a)), ("Bearer у cookie", find_jwts(raw_c)),
+                          ("cookie", [self.cookies[k] for k in self.TOKEN_COOKIES if k in self.cookies])):
+            toks = [t for t in toks if jwt_claims(t).get("token_use", "access") != "id"]
+            live = [t for t in toks if (jwt_exp(t) or now + 1) > now]
+            if live:
+                self.token, self.token_source = max(live, key=lambda t: jwt_exp(t) or 0), src
+                break
+            if toks and not self.token:
+                self.token, self.token_source = toks[0], src      # прострочений — може оновимо
         self.s = new_session()
         self.engine = "chrome" if creq else "python"
         self._apollo_token = None
@@ -141,7 +151,7 @@ class OlxClient:
     def describe(self):
         """Без секретів: назви cookie і поля токена — для діагностики."""
         c = jwt_claims(self.token or "")
-        return {"cookie_names": sorted(self.cookies.keys()),
+        return {"cookie_names": sorted(self.cookies.keys()), "source": self.token_source,
                 "token": {k: c.get(k) for k in ("iss", "client_id", "token_use", "scope", "exp")} if c else None,
                 "expires_in": self.token_expires_in()}
 
@@ -181,7 +191,7 @@ class OlxClient:
             return r.text[:2000]
 
     def _save_token(self, token):
-        self.token = token
+        self.token, self.token_source = token, "оновлений"
         if self.auth_path:
             with open(self.auth_path, "w", encoding="utf-8") as f:
                 f.write("Authorization: Bearer " + token)

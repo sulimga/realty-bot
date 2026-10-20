@@ -452,7 +452,7 @@ def cmd_check(a):
     print(f"Cookie: {len(names)} шт." + (f" (з них про вхід: {', '.join(keyish)})" if keyish else ""))
     if d["token"]:
         t = d["token"]
-        print(f"Токен: {t.get('token_use') or '?'}, видавець {t.get('iss') or '?'}, "
+        print(f"Токен ({d.get('source')}): {t.get('token_use') or '?'}, видавець {t.get('iss') or '?'}, "
               f"дійсний ще {fmt_left(d['expires_in'])}")
     else:
         print("Токена (Authorization: Bearer …) не знайшов")
