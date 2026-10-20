@@ -398,7 +398,11 @@ def resolve_geo(client, estate, parent, street_override=None, house_override=Non
                 if pt.get("osmBuildingId"):
                     geo["osm_building_id"] = pt["osmBuildingId"]
                 # район і метро — тільки коли dom.ria знає точний будинок
-                g = client.geo_by_point(pt["latitude"], pt["longitude"]) or {}
+                try:
+                    g = client.geo_by_point(pt["latitude"], pt["longitude"]) or {}
+                except Exception as e:          # район/метро не обов'язкові — dom.ria підставить сама
+                    print(f"  ⚠ dom.ria не віддала район/метро ({type(e).__name__}) — без них")
+                    g = {}
                 if g.get("area"):
                     geo["district_id"] = g["area"]["areaID"]
                     geo["district_type_id"] = 1

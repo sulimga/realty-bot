@@ -12,6 +12,8 @@ import time
 from datetime import datetime, timezone
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE = "https://dom.ria.com"
 PHOTO_UPLOAD_URL = "https://9.riastatic.com/upload/v4/"
@@ -70,6 +72,12 @@ class DomRiaClient:
         self.verbose = verbose
         os.makedirs(log_dir, exist_ok=True)
         self.s = requests.Session()
+        # Повтор ЛИШЕ для читання (GET): dom.ria інколи відповідає повільно.
+        # POST (створення/зміна оголошення) не повторюємо — щоб не було дублів.
+        retry = Retry(total=3, connect=3, read=3, backoff_factor=2,
+                      status_forcelist=(502, 503, 504), allowed_methods=frozenset(["GET"]),
+                      raise_on_status=False)
+        self.s.mount("https://", HTTPAdapter(max_retries=retry))
         self.s.headers.update({
             "User-Agent": UA,
             "Accept": "application/json, text/plain, */*",
@@ -114,7 +122,7 @@ class DomRiaClient:
 
     # ------------------------------------------------------------ авторизація
     def check_auth(self):
-        r = self.s.get(BASE + "/v1/api/user/balance", headers=self._h(), timeout=20)
+        r = self.s.get(BASE + "/v1/api/user/balance", headers=self._h(), timeout=40)
         return self._json(r, "check_auth")
 
     # ------------------------------------------------------------ гео (публічне)
@@ -122,39 +130,39 @@ class DomRiaClient:
         r = self.s.get(BASE + "/node/geo/getGeoByPoint", params={
             "latitude": lat, "longitude": lng, "langId": LANG_UK,
             "withStreetData": 1, "withBuildingData": 1, "withNewbuild": 1, "withMetro": 1,
-        }, headers=self._h(auth=False), timeout=20)
+        }, headers=self._h(auth=False), timeout=40)
         return self._json(r, "geo_by_point")
 
     def point_by_geo(self, city_id, street_id, building_num, address_text=""):
         r = self.s.get(BASE + "/node/geo/getPointByGeo", params={
             "cityId": city_id, "streetId": street_id, "buildingNum": building_num,
             "address": address_text,
-        }, headers=self._h(auth=False), timeout=20)
+        }, headers=self._h(auth=False), timeout=40)
         return self._json(r, "point_by_geo")
 
     def autocomplete_city(self, text):
         r = self.s.get(BASE + "/node/api/autocompleteV3", params={
             "lang_id": LANG_UK, "onlyCity": 1, "fromAddForm": 1, "text": text,
-        }, headers=self._h(auth=False), timeout=20)
+        }, headers=self._h(auth=False), timeout=40)
         return self._json(r, "autocomplete_city")
 
     def autocomplete_street(self, city_id, text):
         r = self.s.get(BASE + "/node/api/autocompleteV3", params={
             "type": "street", "fromAddForm": 1, "city_id": city_id,
             "lang_id": LANG_UK, "text": text,
-        }, headers=self._h(auth=False), timeout=20)
+        }, headers=self._h(auth=False), timeout=40)
         return self._json(r, "autocomplete_street")
 
     def building_by_location(self, state_id, city_id, street_id, building_no):
         r = self.s.get(BASE + "/v1/api/building/by-location", params={
             "city_id": city_id, "state_id": state_id, "street_id": street_id,
             "building_no": building_no, "newAddForm": 1, "building_entity_id": "",
-        }, headers=self._h(), timeout=20)
+        }, headers=self._h(), timeout=40)
         return self._json(r, "building_by_location")
 
     def get_realty(self, realty_id):
         r = self.s.get(f"{BASE}/node/getCouchRealtyById/{realty_id}/",
-                       headers=self._h(), timeout=20)
+                       headers=self._h(), timeout=40)
         return self._json(r, "get_realty")
 
     # ------------------------------------------------------------ оголошення
@@ -284,5 +292,5 @@ class DomRiaClient:
 
     def publication_price(self, realty_id):
         r = self.s.get(f"{BASE}/v1/api/payments/get-publication-price/{realty_id}",
-                       headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=20)
+                       headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=40)
         return self._json(r, "publication_price")

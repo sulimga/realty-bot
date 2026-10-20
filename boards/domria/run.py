@@ -17,6 +17,8 @@ import sys
 import traceback
 import types
 
+import requests
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path[:0] = [HERE, os.path.join(ROOT, "crm"), os.path.join(ROOT, "common")]
@@ -82,6 +84,9 @@ def load_cfg():
 def finish_error(e):
     if isinstance(e, domria_client.AuthError):
         bp.result(False, f"dom.ria: cookie застаріли ({e}). Оновіть їх: кнопка «🍪 Cookies» → dom.ria.")
+    elif isinstance(e, requests.exceptions.RequestException):
+        bp.result(False, f"dom.ria не відповідає ({type(e).__name__}). Спробуйте ще раз за кілька хвилин. "
+                         f"Якщо чернетку вже створено — вона в кабінеті dom.ria, повторна спроба створить нову.")
     elif isinstance(e, (domria_client.DomRiaError, SystemExit)):
         bp.result(False, f"dom.ria: {e}")
     else:
