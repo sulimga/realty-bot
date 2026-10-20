@@ -457,7 +457,15 @@ def cmd_check(a):
     else:
         print("Токена (Authorization: Bearer …) не знайшов")
     print("Зв'язок із OLX: " + "; ".join(client.probe()))
-    print(f"Спосіб з'єднання: {client.engine}")
+    rep = client.token_report()
+    for x in rep:
+        print(f"• токен з {x['src']}: видавець …{x['iss']}, тип {x['use'] or '?'}, діє ще {x['left_min']} хв "
+              f"(всього живе {x['life_min']} хв) → users/me: HTTP {x['users_me']}")
+    if not rep:
+        print("• жодного токена (eyJ…) не знайшов ні в Authorization, ні в cookie")
+    good = [x for x in rep if x["users_me"] == 200]
+    if good:
+        client.use_token(good[0]["token"], good[0]["src"])
     client.ensure_token()
     me = client.me()
     who = me.get("email") or me.get("name") or me.get("id") or "?"

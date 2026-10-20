@@ -120,6 +120,8 @@ class OlxClient:
         self.device_id = device_id
         self.log_dir = log_dir
         raw_c, raw_a = _read(cookie_path), _read(auth_path)
+        self._all_tokens = [("Authorization", t) for t in find_jwts(raw_a)] + \
+            [("cookie", t) for t in find_jwts(raw_c)]
         self.cookies = parse_cookie_string(raw_c)
         # Пріоритет: надісланий рядок Authorization -> Bearer у тексті cookie -> cookie access_token.
         # (cookie access_token — інший токен сайту, для API він «invalid_token»; лише як запасний варіант)
@@ -263,6 +265,27 @@ class OlxClient:
         if r.status_code == 401 and retry_auth and self.try_refresh():
             r = self.s.request(method, url, headers=headers_fn(), timeout=60, **kw)
         return r
+
+    def token_report(self):
+        """Усі знайдені токени (без самих значень): звідки, хто видав, скільки діє, чи приймає OLX."""
+        out, now = [], int(time.time())
+        for src, t in self._all_tokens:
+            c = jwt_claims(t)
+            left = (int(c["exp"]) - now) if c.get("exp") else None
+            iss = str(c.get("iss") or "?")
+            try:
+                r = self.s.get(WWW + "/api/v1/users/me/", timeout=30,
+                               headers={**self._h_www(auth=False), "Authorization": f"Bearer {t}"})
+                st = r.status_code
+            except Exception as e:  # noqa: BLE001
+                st = type(e).__name__
+            life = (int(c["exp"]) - int(c["iat"])) // 60 if c.get("exp") and c.get("iat") else "?"
+            out.append({"src": src, "iss": iss[-40:], "use": c.get("token_use"), "left_min": None if left is None else left // 60,
+                        "life_min": life, "users_me": st, "token": t})
+        return out
+
+    def use_token(self, t, src):
+        self.token, self.token_source = t, src
 
     def probe(self):
         """Доступність сайтів OLX із цього сервера (публічні адреси, без входу)."""
