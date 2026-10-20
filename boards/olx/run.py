@@ -405,6 +405,13 @@ def cmd_post(a):
             bp.result(True, "OLX: перевірка без відправки — дані зібрано (див. вище), нічого не створено")
             return
 
+        kind, ok = bp.ask_choice("OLX: усе вірно? Після «Створити» оголошення з'явиться в кабінеті OLX "
+                                 "і чекатиме на оплату розміщення",
+                                 [("yes", "✅ Створити на OLX"), ("no", "❌ Скасувати")])
+        if ok != "yes":
+            bp.result(False, "OLX: скасовано, на OLX нічого не відправлено")
+            return
+
         print(f"[3/5] Фото на OLX ({len(urls)})…")
         images, failed = upload_photos(client, urls)
         if not images:
