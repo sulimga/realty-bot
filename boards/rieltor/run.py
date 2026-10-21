@@ -2,7 +2,9 @@
 rieltor.ua — точка входу для диспетчера (протокол: common/board_protocol.py).
 
     python run.py post --url <посилання CRM> [--no-ask]
-    python run.py refresh          # оновити дати актуальності всіх активних оголошень
+    python run.py refresh          # спитати: усі чи категорія (у боті — кнопками)
+    python run.py refresh --all    # усі, від найстаріших, до добового ліміту
+    python run.py refresh --category houses --oper sale   # одна категорія
     python run.py check
 
 Логіка — у crm_to_rieltor_payload.py / rieltor_geo.py / rieltor_photos.py (ті самі файли,
@@ -135,8 +137,25 @@ def cmd_post(a):
 def cmd_refresh(a):
     import rieltor_refresh_dates as RF
     cookie = load_cookie()
+    category, oper = a.category, a.oper
+    if not a.all and not category:
+        kind, v = bp.ask_choice("Що оновити на rieltor?", [("all", "Усі оголошення (від найстарішого)"),
+                                                          ("cat", "Окрему категорію")])
+        if kind != "opt":
+            bp.result(False, "rieltor: оновлення дат скасовано")
+            return
+        if v == "cat":
+            kind, category = bp.ask_choice("Категорія", [(k, n) for k, (n, _) in RF.CATEGORIES.items()])
+            if kind != "opt":
+                bp.result(False, "rieltor: оновлення дат скасовано")
+                return
+    if category and not oper:
+        kind, oper = bp.ask_choice("Продаж чи оренда?", [(k, n) for k, (n, _) in RF.OPERS.items()])
+        if kind != "opt":
+            bp.result(False, "rieltor: оновлення дат скасовано")
+            return
     bp.info("rieltor: оновлюю дати від найстаріших, доки сайт не скаже «ліміт»…")
-    res = RF.refresh_until_limit(cookie, log=bp.info)
+    res = RF.refresh_until_limit(cookie, log=bp.info, category=category, oper=oper)
     save_log("refresh", res)
     ok = res["stopped"] == "" and (res["failed"] == 0 or res["ok"] > 0)
     bp.result(ok, RF.summary_text(res), stop_batch=res["stopped"] == "cookie")
@@ -155,7 +174,11 @@ def main():
     p.add_argument("--url", required=True)
     p.add_argument("--techpassport", nargs="*", default=[])   # rieltor не потребує — ігноруємо
     p.add_argument("--no-ask", action="store_true")            # пакетний режим: нічого не питати
-    sub.add_parser("refresh")
+    import rieltor_refresh_dates as RF
+    r = sub.add_parser("refresh")
+    r.add_argument("--all", action="store_true")
+    r.add_argument("--category", choices=list(RF.CATEGORIES))
+    r.add_argument("--oper", choices=list(RF.OPERS))
     sub.add_parser("check")
     a = ap.parse_args()
     try:

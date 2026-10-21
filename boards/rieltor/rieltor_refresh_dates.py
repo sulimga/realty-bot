@@ -47,6 +47,45 @@ DATE_FIELD_PRIORITY = [
 ]
 DATE_KEY_HINT = re.compile(r"refresh|actual|update|upd|date|_at$|At$|time", re.I)
 
+# Категорії rieltor (itemType / operType — як у crm_to_rieltor_payload.py)
+CATEGORIES = {               # ключ: (назва, набір itemType)
+    "houses": ("Будинки", {3}),
+    "flats": ("Квартири (і кімнати)", {1, 2}),
+    "commercial": ("Комерційна", {4}),
+    "land": ("Земля", {5}),
+    "parking": ("Паркомісця", {6}),
+}
+OPERS = {"sale": ("Продаж", 1), "rent": ("Оренда", 2)}
+ITEM_TYPE_KEYS = ("itemType", "item_type", "itemTypeId")
+OPER_TYPE_KEYS = ("operType", "oper_type", "operTypeId")
+
+
+class FilterUnavailable(Exception):
+    pass
+
+
+def _get_int(o: dict, keys):
+    for k in keys:
+        v = o.get(k)
+        if isinstance(v, dict):
+            v = v.get("id", v.get("value"))
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def filter_offers(offers: list, category: str, oper: str) -> list:
+    """Лишає оголошення потрібної категорії й типу угоди. Якщо в списку немає полів типу — FilterUnavailable."""
+    items = CATEGORIES[category][1]
+    op = OPERS[oper][1]
+    if offers and not any(_get_int(o, ITEM_TYPE_KEYS) is not None and _get_int(o, OPER_TYPE_KEYS) is not None
+                          for o in offers):
+        raise FilterUnavailable("у списку оголошень rieltor не знайдено полів типу нерухомості/угоди")
+    return [o for o in offers if _get_int(o, ITEM_TYPE_KEYS) in items and _get_int(o, OPER_TYPE_KEYS) == op]
+
+
 LIMIT_MARKERS = ("ліміт", "лимит", "limit", "перевищ", "превыш", "exceed", "too many")
 
 
@@ -195,20 +234,35 @@ def error_text(body) -> str:
     return str(body)[:300]
 
 
-def refresh_until_limit(cookie: str, log=print, delay=DELAY_BETWEEN_SECONDS) -> dict:
+def refresh_until_limit(cookie: str, log=print, delay=DELAY_BETWEEN_SECONDS,
+                        category: str = None, oper: str = None) -> dict:
     """
-    Оновлює найстаріші оголошення, доки rieltor не скаже «ліміт».
+    Оновлює найстаріші оголошення (усі або лише категорію+угоду), доки rieltor не скаже «ліміт».
     → {"total", "ok", "failed", "limit", "limit_text", "stopped", "date_field", "refreshed": [id…], "errors": […]}
     """
-    offers = fetch_offers(cookie, log=None)
+    all_offers = fetch_offers(cookie, log=None)
+    sample = all_offers[0] if all_offers else {}
+    scope = ""
+    if category:
+        scope = f"{CATEGORIES[category][0]} / {OPERS[oper][0]}"
+        try:
+            offers = filter_offers(all_offers, category, oper)
+        except FilterUnavailable as e:
+            return {"total": 0, "ok": 0, "failed": 0, "limit": False, "limit_text": "", "stopped": "filter",
+                    "filter_error": str(e), "scope": scope, "date_field": None, "refreshed": [], "errors": [],
+                    "sample_keys": sorted(sample.keys()),
+                    "sample_types": {k: sample.get(k) for k in ITEM_TYPE_KEYS + OPER_TYPE_KEYS if k in sample}}
+    else:
+        offers = all_offers
     offers, field = sort_oldest_first(offers)
-    res = {"total": len(offers), "ok": 0, "failed": 0, "limit": False, "limit_text": "",
+    res = {"scope": scope, "total": len(offers), "ok": 0, "failed": 0, "limit": False, "limit_text": "",
            "stopped": "", "date_field": field, "refreshed": [], "errors": [],
            # для діагностики: які поля є в оголошенні і які з них схожі на дати
-           "sample_keys": sorted(offers[0].keys()) if offers else [],
-           "sample_dates": {k: v for k, v in (offers[0] if offers else {}).items() if DATE_KEY_HINT.search(k)}}
+           "sample_keys": sorted(sample.keys()),
+           "sample_dates": {k: v for k, v in sample.items() if DATE_KEY_HINT.search(k)},
+           "sample_types": {k: sample.get(k) for k in ITEM_TYPE_KEYS + OPER_TYPE_KEYS if k in sample}}
     if log:
-        log(f"Активних оголошень: {len(offers)}. Порядок: " +
+        log((f"{scope}: " if scope else "") + f"оголошень до оновлення: {len(offers)}. Порядок: " +
             (f"від найстарішого за полем «{field}»" if field else "за зростанням ID (поле дати не знайдено)"))
 
     fails_in_row = 0
@@ -248,8 +302,15 @@ def refresh_until_limit(cookie: str, log=print, delay=DELAY_BETWEEN_SECONDS) -> 
 
 
 def summary_text(res: dict) -> str:
+    if res["stopped"] == "filter":
+        return (f"rieltor: категорію «{res['scope']}» не вдалося виділити — {res['filter_error']}. "
+                "Нічого не оновлено (щоб не витратити добовий ліміт на інші оголошення). "
+                "Надішліть /logs — підправлю")
     left = res["total"] - res["ok"]
-    t = f"rieltor: оновлено дати {res['ok']} з {res['total']} оголошень (найстаріші першими)"
+    where = f" у категорії «{res['scope']}»" if res.get("scope") else ""
+    if res["total"] == 0:
+        return f"rieltor: активних оголошень{where} немає"
+    t = f"rieltor: оновлено дати {res['ok']} з {res['total']} оголошень{where} (найстаріші першими)"
     if res["limit"]:
         t += f". Сайт повідомив про ліміт: «{res['limit_text']}». Не оновлено сьогодні: {left}"
     elif res["stopped"] == "cookie":
