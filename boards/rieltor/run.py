@@ -135,18 +135,11 @@ def cmd_post(a):
 def cmd_refresh(a):
     import rieltor_refresh_dates as RF
     cookie = load_cookie()
-    offers = RF.fetch_offers(cookie)
-    ok = fail = 0
-    for o in offers:
-        try:
-            RF.refresh_offer(o["id"], cookie)
-            ok += 1
-        except Exception as e:  # noqa: BLE001
-            fail += 1
-            bp.info(f"№ {o.get('id')}: помилка {e}")
-        import time
-        time.sleep(RF.DELAY_BETWEEN_SECONDS)
-    bp.result(fail == 0, f"rieltor: оновлено дати {ok} оголошень" + (f", помилок: {fail}" if fail else ""))
+    bp.info("rieltor: оновлюю дати від найстаріших, доки сайт не скаже «ліміт»…")
+    res = RF.refresh_until_limit(cookie, log=bp.info)
+    save_log("refresh", res)
+    ok = res["stopped"] == "" and (res["failed"] == 0 or res["ok"] > 0)
+    bp.result(ok, RF.summary_text(res), stop_batch=res["stopped"] == "cookie")
 
 
 def cmd_check(a):
