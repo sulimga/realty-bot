@@ -34,7 +34,10 @@ import requests
 from extract_estate import fetch_estate_data, extract_estate_data, HEADERS as CRM_HEADERS
 from domria_client import DomRiaClient, DomRiaError, AuthError, _now_iso, PARTNER_ID
 from mapping import (detect_deal, build_characteristics, describe, PARENT_BY_TYPE,
-                     TYPE_NAMES, dict_for)
+                     TYPE_NAMES, dict_for, find_cadastral_in_text)
+
+# Типи "ділянка" (dom.ria): 25 — під забудову, 26 — комерційна, 27 — с/г.
+LAND_TYPES = {25, 26, 27}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 POSTED_DIR = os.path.join(HERE, "posted")
@@ -460,6 +463,10 @@ def build_listing(client, estate, cfg, street=None, house=None, asker=None):
     op, rt = detect_deal(estate.get("deal_title", ""))
     if not rt:
         raise DomRiaError(f"Не зміг визначити тип об'єкта з «{estate.get('deal_title')}»")
+    if op == 1 and rt in LAND_TYPES and not find_cadastral_in_text(estate.get("description")):
+        raise DomRiaError(
+            "Пропущено: у описі CRM немає кадастрового номера ділянки "
+            "(формат 3220882200:03:005:1306). Оголошення НЕ створено.")
     parent = PARENT_BY_TYPE[rt]
     cv, warnings, dkey, leftovers, unmatched = build_characteristics(estate, rt, op, cfg)
     geo = resolve_geo(client, estate, parent, street, house, asker)

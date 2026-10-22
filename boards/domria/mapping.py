@@ -81,6 +81,15 @@ CONDITION_SYNONYMS = {
 }
 
 
+CADASTRAL_RE = re.compile(r"\b\d{10}:\d{2}:\d{3}:\d{4}\b")
+
+
+def find_cadastral_in_text(text):
+    """Шукає кадастровий номер ділянки (формат 3220882200:03:005:1306) у вільному тексті."""
+    m = CADASTRAL_RE.search(str(text or ""))
+    return m.group(0) if m else None
+
+
 def _norm(s):
     s = str(s or "").lower().replace("ё", "е").replace("’", "'").replace("`", "'")
     for ru, uk in RU_UK:
@@ -373,7 +382,7 @@ def build_characteristics(estate, rt, op, config):
         c, oid = opt_by_label("furniture", "немає" if no else "є")
         if oid:
             cv[str(c)] = oid
-    cad = p.get(["кадастр"])
+    cad = find_cadastral_in_text(estate.get("description")) or p.get(["кадастр"])
     if cad and cid("cadastral"):
         cv[str(cid("cadastral"))] = str(cad).strip()
 
