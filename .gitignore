@@ -2,6 +2,7 @@
 data/
 *.env
 cookies*.txt
+crm_admin_cookie.txt
 config.json
 logs/
 posted/
