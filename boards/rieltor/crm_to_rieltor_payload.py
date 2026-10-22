@@ -290,10 +290,14 @@ def fetch_min_rate(cookie: str, city_id: int, item_type: int, oper_type: int) ->
 
 
 def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | None = None,
-                   upload_photos_flag: bool = False) -> dict:
+                   upload_photos_flag: bool = False, item_type_override: int | None = None) -> dict:
     oper_type, item_type = parse_deal_title(crm["deal_title"])
     crm_type_label = crm["deal_title"].split("/", 1)[1].strip().lower() if "/" in crm["deal_title"] else ""
     unknown_crm_type = False
+    if item_type_override is not None and item_type_override != item_type:
+        print(f"  Категорія в CRM-адмінці не збігається з заголовком ('{crm['deal_title']}') — "
+              f"використовую категорію з CRM.")
+        item_type = item_type_override
     if item_type is None:
         item_type = 4  # Комерційна — розумний дефолт для нерозпізнаних типів CRM
         unknown_crm_type = True

@@ -29,6 +29,7 @@ bp.install_print_hook()
 
 import crm_to_rieltor_payload as R  # noqa: E402
 from extract_estate import fetch_estate_data  # noqa: E402
+import extract_estate_admin as ADM  # noqa: E402
 from rieltor_geo import RieltorGeoClient  # noqa: E402
 from rieltor_photos import RateLimitExhausted, upload_photos  # noqa: E402
 
@@ -36,6 +37,28 @@ DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 COOKIES = os.path.join(DATA, "secrets", "rieltor_cookies.txt")
 LOG_DIR = os.path.join(DATA, "rieltor", "runs")
 MIN_PHOTOS_REQUIRED = 3
+
+# cookie самої CRM-адмінки (інший, ніж rieltor_cookies.txt) — лише для звірки категорії/типу
+ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")
+
+
+def check_land_category(crm):
+    """Best-effort звірка через авторизовану сторінку CRM: якщо Категорія об'єкта —
+    «Земельні ділянки», примусово land (itemType=5), навіть якщо заголовок хтось зіпсував
+    вручну. Якщо cookie CRM-адмінки нема або запит не вдався — просто повертає None,
+    постинг іде далі за звичайним визначенням типу з заголовка (нічого не ламає)."""
+    estate_id = crm.get("estate_id")
+    if not estate_id or not os.path.exists(ADM.COOKIE_FILE):
+        return None
+    try:
+        admin = ADM.fetch_estate_admin_data(estate_id)
+        cat = (admin.get("category") or "").strip()
+        bp.info(f"CRM-адмінка: категорія «{cat}», тип «{admin.get('type')}»")
+        return 5 if cat == "Земельні ділянки" else None
+    except Exception as e:  # noqa: BLE001 — best-effort, не блокуємо постинг
+        bp.info(f"Не вдалось звірити категорію в CRM-адмінці ({type(e).__name__}: {e}) — "
+                f"покладаюсь на заголовок CRM")
+        return None
 
 
 class CookieMissing(Exception):
@@ -77,8 +100,11 @@ def cmd_post(a):
         bp.info(f"У CRM {len(photos)} фото (потрібно {MIN_PHOTOS_REQUIRED}) — дублюю останнє {missing} раз(и)")
         crm["photos"] = photos + [photos[-1]] * missing
 
+    item_type_override = check_land_category(crm)
+
     client = RieltorGeoClient(cookie)
-    payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False)
+    payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False,
+                              item_type_override=item_type_override)
 
     # Продаж ділянки без кадастрового номера в описі CRM — не питаємо, одразу пропускаємо
     # (при масовому завантаженні землі нема часу перевіряти кожен об'єкт вручну)

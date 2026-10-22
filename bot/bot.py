@@ -266,6 +266,10 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mt = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
         when = time.strftime("%d.%m %H:%M", time.localtime(max(mt))) if mt else "—"
         lines.append(f"  {b['title']}: {'оновлено ' + when if when != '—' else 'немає'}")
+    crm_admin_p = os.path.join(SECRETS, "crm_admin_cookie.txt")
+    when = time.strftime("%d.%m %H:%M", time.localtime(os.path.getmtime(crm_admin_p))) \
+        if os.path.exists(crm_admin_p) else "—"
+    lines.append(f"  {CRM_ADMIN_TITLE}: {'оновлено ' + when if when != '—' else 'немає'}")
     batch = ctx.application.bot_data.get("batch")
     if batch:
         mins = int(time.time() - batch["started"]) // 60
@@ -512,10 +516,24 @@ async def start_tp(update, ctx):
 
 
 # ------------------------------------------------------------------ cookies
+# CRM-адмінка — не "сайт" у сенсі диспетчера (нічого на ній не публікуємо, лише
+# читаємо авторизовану сторінку об'єкта для надійнішого визначення категорії/типу),
+# тому це окремий псевдо-ключ, якого немає в D.boards().
+CRM_ADMIN_KEY = "crm_admin"
+CRM_ADMIN_TITLE = "CRM (адмінка, для визначення категорії)"
+CRM_ADMIN_HINT = (
+    "Надішліть cookie сесії CRM (crm-capital.realtsoft.net) одним повідомленням.\n"
+    "Де взяти: залогіньтесь у CRM у Chrome → F12 → Network → відкрийте будь-який об'єкт "
+    "(crm-capital.realtsoft.net/estate/…) → Request Headers → cookie → скопіюйте значення.\n"
+    "⚠️ Це ІНША авторизація, ніж для dom.ria/rieltor/OLX — окремий cookie саме самої CRM.\n"
+    "Повідомлення з cookie я одразу видалю з чату.")
+
+
 async def start_cookies(update, ctx):
     reset(ctx)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(b["title"], callback_data=f"ck:{k}")]
-                               for k, b in D.boards().items()])
+    rows = [[InlineKeyboardButton(b["title"], callback_data=f"ck:{k}")] for k, b in D.boards().items()]
+    rows.append([InlineKeyboardButton(CRM_ADMIN_TITLE, callback_data=f"ck:{CRM_ADMIN_KEY}")])
+    kb = InlineKeyboardMarkup(rows)
     await update.message.reply_text("Для якого сайту оновити cookie?", reply_markup=kb)
 
 
@@ -525,6 +543,20 @@ async def save_cookie(update, ctx, board_key, text):
     raw = text.strip()
     if raw.lower().startswith("cookie:"):
         raw = raw.split(":", 1)[1].strip()
+
+    if board_key == CRM_ADMIN_KEY:
+        p = os.path.join(SECRETS, "crm_admin_cookie.txt")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(raw)
+        os.chmod(p, 0o600)
+        try:
+            await update.message.delete()
+        except BadRequest:
+            pass
+        reset(ctx)
+        return await ctx.bot.send_message(update.effective_chat.id,
+            "🍪 Збережено cookie CRM-адмінки. Перевірю на наступному постингу землі на rieltor.ua.")
+
     # Рядок «Authorization: Bearer <JWT>» (OLX) зберігаємо окремо, щоб не затерти cookie і навпаки
     jwt = re.search(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+", raw)
     pairs = len(re.findall(r"[\w.-]+=[^;\s]*", re.sub(r"eyJ[\w.-]+", "", raw)))
@@ -749,6 +781,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         key = data[3:]
         s["mode"] = f"await_cookie:{key}"
         await q.edit_message_reply_markup(None)
+        if key == CRM_ADMIN_KEY:
+            return await ctx.bot.send_message(chat_id, CRM_ADMIN_HINT)
         return await ctx.bot.send_message(
             chat_id, D.boards()[key].get("cookie_hint") or (
                      f"Надішліть cookie для {D.boards()[key]['title']} одним повідомленням.\n"
