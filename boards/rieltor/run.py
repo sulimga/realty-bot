@@ -80,6 +80,13 @@ def cmd_post(a):
     client = RieltorGeoClient(cookie)
     payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False)
 
+    # Продаж ділянки без кадастрового номера в описі CRM — не питаємо, одразу пропускаємо
+    # (при масовому завантаженні землі нема часу перевіряти кожен об'єкт вручну)
+    if payload.get("itemType") == 5 and payload.get("operType") == 1 and not payload.get("cadastralNumber"):
+        bp.result(False, f"rieltor: {crm.get('article') or ''} продаж ділянки без кадастрового номера "
+                         f"в описі CRM — пропущено")
+        return
+
     # Продаж будинку без площі ділянки — rieltor.ua не прийме: питаємо
     if payload.get("itemType") == 3 and payload.get("operType") == 1 and not payload.get("groundArea"):
         if a.no_ask:

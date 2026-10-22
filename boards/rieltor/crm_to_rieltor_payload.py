@@ -190,6 +190,16 @@ EXPANSION_TRIGGER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Кадастровий номер ділянки: 3220882200:03:005:1306 (10:2:3:4 цифри) —
+# підтверджено реальним запитом rieltor.ua (cadastralNumber у /api/offers/).
+CADASTRAL_RE = re.compile(r"\b\d{10}:\d{2}:\d{3}:\d{4}\b")
+
+
+def find_cadastral_in_text(text: str):
+    """Шукає кадастровий номер ділянки у вільному тексті опису CRM."""
+    m = CADASTRAL_RE.search(text or "")
+    return m.group(0) if m else None
+
 
 def extract_ground_area_from_text(text: str, context_window: int = 60):
     """
@@ -323,6 +333,11 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             "detailParams": {"year": None, "ceilHeight": None},
         })
 
+    elif item_type == 5:  # ділянка
+        cadastral = find_cadastral_in_text(crm.get("description", ""))
+        if cadastral:
+            payload["cadastralNumber"] = cadastral
+
     elif item_type == 4:  # комерція
         aim_text = (crm.get("deal_title") or "").lower()
         if unknown_crm_type:
@@ -452,6 +467,11 @@ def process_source(source: str, cookie: str, do_upload: bool = True, do_publish:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
     if do_publish:
+        if payload.get("itemType") == 5 and payload.get("operType") == 1 and not payload.get("cadastralNumber"):
+            print()
+            print("=== ПУБЛІКАЦІЮ ЗУПИНЕНО ===")
+            print("Продаж ділянки, а кадастрового номера немає в описі CRM — об'єкт пропущено.")
+            return
         if payload.get("itemType") == 3 and payload.get("operType") == 1 and not payload.get("groundArea"):
             print()
             print("=== ПУБЛІКАЦІЮ ЗУПИНЕНО ===")
