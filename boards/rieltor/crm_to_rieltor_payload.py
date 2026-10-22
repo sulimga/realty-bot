@@ -41,6 +41,26 @@ ITEM_TYPE_BY_DEAL = {
 }
 OPER_TYPE_BY_DEAL = {"продаж": 1, "продажа": 1, "оренда": 2, "аренда": 2}
 
+# Запасний варіант, якщо точного збігу в ITEM_TYPE_BY_DEAL нема (CRM формулює тип
+# по-різному: «Земля під інд. будівництво», «С/г ділянка», «Присадибна ділянка» тощо) —
+# розпізнаємо за ключовим словом. Порядок важливий: земля/ділянка — перші, щоб не
+# сплутати з будинком («ділянка під забудову будинку» тощо).
+ITEM_TYPE_KEYWORDS = [
+    (5, ["земл", "ділянк", "участ"]),
+    (3, ["будин", "дом", "дуплекс", "таунхаус", "котедж", "коттедж", "вілл", "вилл", "дач"]),
+    (4, ["офіс", "офис", "торгов", "торгів", "склад"]),
+    (1, ["квартир"]),
+    (2, ["кімнат", "комнат"]),
+    (6, ["паркоміс", "парковоч", "паркомест"]),
+]
+
+
+def guess_item_type(label: str):
+    for item_type, kws in ITEM_TYPE_KEYWORDS:
+        if any(kw in label for kw in kws):
+            return item_type
+    return None
+
 # Конкретний підтип будинку (houseType) за назвою з CRM — якщо CRM дає
 # щось конкретніше за узагальнене "Будинок", підставляємо точний код
 # замість дефолтного "Приватний будинок".
@@ -112,12 +132,17 @@ DESCRIPTION_FIELD_BY_ITEM_TYPE = {
 
 
 def parse_deal_title(deal_title: str):
-    """'Оренда / Будинок' -> (operType=2, itemType=3)"""
-    parts = [p.strip().lower() for p in deal_title.split("/")]
+    """'Оренда / Будинок' -> (operType=2, itemType=3)
+    Ріжемо лише по ПЕРШОМУ '/' — сама назва типу іноді теж містить слеш
+    (напр. 'Продаж / С/г ділянка')."""
+    parts = [p.strip().lower() for p in deal_title.split("/", 1)]
     oper = OPER_TYPE_BY_DEAL.get(parts[0])
     item = None
     if len(parts) > 1:
-        item = ITEM_TYPE_BY_DEAL.get(parts[1])
+        label = parts[1]
+        item = ITEM_TYPE_BY_DEAL.get(label)
+        if item is None:
+            item = guess_item_type(label)
     return oper, item
 
 
