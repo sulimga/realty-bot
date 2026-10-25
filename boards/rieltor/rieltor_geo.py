@@ -147,6 +147,7 @@ def resolve_address(
     house_query: str | None = None,
     district_query: str | None = None,
     complex_query: str | None = None,
+    fix_district: bool = False,
 ) -> dict:
     """
     Повертає словник із ключами, готовими лягти прямо в payload /api/offers/:
@@ -176,6 +177,7 @@ def resolve_address(
         "streetId": None, "houseId": None, "newhouseId": None,
         "ptolemyHouseId": None, "latitude": None, "longitude": None,
         "matched": False, "method": None,
+        "district_candidates": [],   # лише при fix_district: райони, де є ця вулиця
     }
 
     # --- Крок 1: місто (потрібен хоча б орієнтовний cityId для пошуку ЖК) ---
@@ -188,6 +190,7 @@ def resolve_address(
     result["latitude"] = float(city["lat"])
     result["longitude"] = float(city["lng"])
     has_districts = bool(city.get("hasDistricts"))
+    result["has_districts"] = has_districts
 
     # --- Крок 2: ЖК — головне джерело, якщо назва є і знайшлася ---
     if complex_query:
@@ -271,8 +274,51 @@ def resolve_address(
             # немає houseId -> не лишаємо "напівструктуровану" адресу
             result["streetId"] = None
 
+        # --- Крок 5 (лише fix_district, напр. для квартир): район у CRM може бути хибним ---
+        # Вулиця не знайшлась у районі з CRM (або будинку там нема) — шукаємо в яких
+        # районах міста вона є насправді і чи є там потрібний будинок.
+        if fix_district and has_districts:
+            found = _find_street_in_districts(client, result, street_query, house_query, district_id)
+            if found:
+                return found
+
     result["method"] = "city_only"
     return result
+
+
+def _find_street_in_districts(client, result, street_query, house_query, tried_district_id):
+    """Перебирає райони міста (крім уже перевіреного) і шукає вулицю + будинок.
+    Якщо рівно один район має точний збіг будинку — повертає готовий результат.
+    Інакше записує кандидатів у result["district_candidates"] (щоб запитати користувача)."""
+    districts = client.search_districts(result["cityId"])
+    candidates = []   # (district, street, house)
+    for d in districts:
+        d_id = int(d["districtId"])
+        if d_id == tried_district_id:
+            continue
+        streets = client.search_streets(street_query, result["cityId"], d_id)
+        street = _best_match(streets)
+        if not (street and street.get("isMatched")):
+            continue
+        houses = client.search_houses(house_query or "", int(street["streetId"]))
+        house = _pick_house(houses, house_query)
+        if house and (not house_query or house.get("exactMatch")):
+            candidates.append((d, street, house))
+    result["district_candidates"] = [{"districtId": int(d["districtId"]), "name": d["name"]}
+                                     for d, _, _ in candidates]
+    if len(candidates) == 1:
+        d, street, house = candidates[0]
+        result.update({
+            "districtId": int(d["districtId"]), "streetId": int(street["streetId"]),
+            "houseId": int(house["houseId"]), "latitude": float(house["lat"]),
+            "longitude": float(house["lng"]), "matched": True,
+            "method": "street_chain_other_district",
+            "server_house_hints": {
+                k: house.get(k) for k in ("floorCnt", "wallType", "year", "ceilHeight", "houseProjectType")
+                if house.get(k) is not None},
+        })
+        return result
+    return None
 
 
 if __name__ == "__main__":

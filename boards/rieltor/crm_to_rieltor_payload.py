@@ -289,6 +289,132 @@ def fetch_min_rate(cookie: str, city_id: int, item_type: int, oper_type: int) ->
         return 0  # якщо не вдалось дізнатись — безпечніше 0, ніж вигадане число
 
 
+# ---------------------------------------------------------------- квартири (itemType=1)
+ROOM_WORDS = {"одно": 1, "дво": 2, "двох": 2, "три": 3, "трьох": 3, "чотири": 4, "чотирьох": 4,
+              "п'яти": 5, "пʼяти": 5, "пяти": 5, "шести": 6, "шістьох": 6}
+
+
+def find_rooms_in_text(text: str):
+    """'3 кімнати', '2-кімнатна', 'двокімнатна' -> число кімнат або None."""
+    t = (text or "").lower().replace("’", "'")
+    m = re.search(r"(\d+)\s*[-–]?\s*(?:кімн|комн|к\.?\s*кв)", t)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(" + "|".join(ROOM_WORDS) + r")\s*[-–]?\s*(?:кімн|комн)", t)
+    return ROOM_WORDS[m.group(1)] if m else None
+
+
+def find_floor_in_text(text: str):
+    """Повертає (поверх, поверховість) з тексту: '24 поверх', '5 з 9 поверх', '14/24 пов.'."""
+    t = (text or "").lower()
+    m = re.search(r"(\d{1,2})\s*(?:-?й|-?го|-?му|-?ому)?\s*(?:повер[хс]\w*|эт\w*)\s*(?:з|із|из)\s*(\d{1,2})", t) \
+        or re.search(r"(\d{1,2})\s*/\s*(\d{1,2})\s*(?:поверх|пов\b|эт)", t)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    floor = None
+    m = re.search(r"(\d{1,2})\s*(?:-?й|-?го|-?му|-?ому|-?м)?\s*(?:повер[хс]\w*|эт\w*)", t)
+    if m:
+        floor = int(m.group(1))
+    floors = None
+    m = re.search(r"(\d{1,2})\s*-?\s*(?:поверхов\w*|этажн\w*)", t) or \
+        re.search(r"(?:поверховість|этажность)\D{0,5}(\d{1,2})", t)
+    if m:
+        floors = int(m.group(1))
+    return floor, floors
+
+
+def _fmt_area(x):
+    x = float(x)
+    return str(int(round(x))) if abs(x - round(x)) < 0.05 else str(round(x, 1))
+
+
+def _split_pair(val):
+    """'14 / 24' -> (14, 24); '14' -> (14, None)."""
+    m = re.match(r"\s*(\d+)\s*(?:/\s*(\d+))?", str(val or ""))
+    return (int(m.group(1)), int(m.group(2)) if m.group(2) else None) if m else (None, None)
+
+
+def fill_flat(payload: dict, crm: dict, params: dict, geo: dict) -> list:
+    """Додає в payload поля, потрібні для квартири (itemType=1). Повертає список того, що
+    НЕ вдалось визначити: [{"key", "label", "kind": "int"|"area"|"choice", "options"}].
+    Порядок джерел: CRM-параметри -> дані rieltor.ua про будинок (для ЖК/будинку) -> текст опису
+    -> (площі) 40%/20% від загальної. Що лишилось — питаємо користувача."""
+    missing = []
+    qf = crm.get("quick_facts", {}) or {}
+    desc = crm.get("description", "") or ""
+    hints = geo.get("server_house_hints") or {}
+
+    # --- площі
+    common = parse_area(get_param(params, "Площа загальна,м²", "Площадь общая,м²")) \
+        or parse_area(str(qf.get("Площа", "")).split("/")[0])
+    if common:
+        payload["commonArea"] = _fmt_area(common)
+        useful = parse_area(get_param(params, "Площа житлова,м²", "Площадь жилая,м²"))
+        kitchen = parse_area(get_param(params, "Площа кухні,м²", "Площадь кухни,м²"))
+        payload["usefulArea"] = _fmt_area(useful if useful else common * 0.40)
+        payload["kitchenArea"] = _fmt_area(kitchen if kitchen else common * 0.20)
+    else:
+        missing.append({"key": "commonArea", "label": "Загальна площа, м²", "kind": "area"})
+
+    # --- кімнати
+    rooms = get_param(params, "Кіл. кімнат", "Кол. комнат") or qf.get("Кіл. кімнат")
+    rooms = int(re.sub(r"\D", "", str(rooms))) if rooms and re.search(r"\d", str(rooms)) else None
+    if not rooms:
+        rooms = find_rooms_in_text(crm.get("deal_title", "") + "\n" + desc)
+    if rooms:
+        payload["roomCnt"] = min(int(rooms), 6)   # rieltor.ua: максимум 6 («6 і більше»)
+    else:
+        missing.append({"key": "roomCnt", "label": "Кількість кімнат", "kind": "int"})
+
+    # --- поверх і поверховість
+    floor, floors = _split_pair(get_param(params, "Поверх", "Этаж") or qf.get("Поверх"))
+    f2 = get_param(params, "Поверховість", "Этажность")
+    if f2:
+        floors = _split_pair(f2)[0] or floors
+    if not floor or not floors:
+        t_floor, t_floors = find_floor_in_text(desc)
+        floor = floor or t_floor
+        floors = floors or (hints.get("floorCnt") and int(hints["floorCnt"])) or t_floors
+    if floor:
+        payload["floor"] = str(floor)
+    else:
+        missing.append({"key": "floor", "label": "Поверх", "kind": "int"})
+    if floors:
+        payload["floorCnt"] = str(floors)
+    else:
+        missing.append({"key": "floorCnt", "label": "Поверховість будинку", "kind": "int"})
+
+    # --- стан (ремонт)
+    state = COMMON_STATE_MAP.get((get_param(params, "Ремонт") or "").strip().lower())
+    if state:
+        payload["commonState"] = state
+    else:
+        missing.append({"key": "commonState", "label": "Стан (ремонт)", "kind": "choice",
+                        "options": [(1, "Без ремонту"), (2, "Частковий ремонт"), (3, "З ремонтом")]})
+
+    # --- дані про будинок від самого rieltor.ua (підтягуються формою після вибору ЖК/будинку)
+    if hints.get("wallType") is not None:
+        payload["wallType"] = hints["wallType"]
+    if hints.get("houseProjectType") is not None:
+        payload["houseProjectType"] = hints["houseProjectType"]
+    detail = {k: hints[k] for k in ("year", "ceilHeight") if hints.get(k) is not None}
+    if detail:
+        payload["detailParams"] = {"year": detail.get("year"), "ceilHeight": detail.get("ceilHeight")}
+
+    # --- район: у Києві/містах з районами потрібен districtId
+    if geo.get("has_districts") and not payload.get("districtId"):
+        missing.append({"key": "districtId", "label": "Район", "kind": "district",
+                        "options": geo.get("district_candidates") or []})
+    return missing
+
+
+def parse_area(v):
+    if v is None:
+        return None
+    m = re.search(r"\d+(?:[.,]\d+)?", str(v).replace(" ", ""))
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
 def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | None = None,
                    upload_photos_flag: bool = False, item_type_override: int | None = None) -> dict:
     oper_type, item_type = parse_deal_title(crm["deal_title"])
@@ -404,6 +530,7 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             house_query=extract_house_number(addr["house"]) if addr["house"] else None,
             district_query=normalize_district_name(addr["district"]),
             complex_query=complex_name,
+            fix_district=(item_type == 1),
         )
 
     if geo.get("matched"):
@@ -428,6 +555,9 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             "latitude": geo.get("latitude") or crm.get("lat"),
             "longitude": geo.get("longitude") or crm.get("lng"),
         })
+
+    if item_type == 1:
+        payload["_missing"] = fill_flat(payload, crm, params, geo)
 
     payload["_geo_debug"] = geo  # діагностика, прибрати перед реальною відправкою
     payload["_parsed_address"] = addr

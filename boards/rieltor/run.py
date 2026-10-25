@@ -14,6 +14,7 @@ rieltor.ua — точка входу для диспетчера (протоко
 import argparse
 import json
 import os
+import re
 import sys
 import traceback
 
@@ -84,6 +85,53 @@ def save_log(name, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2, default=str)
 
 
+def resolve_missing_flat(payload, client, crm, no_ask):
+    """Квартира: те, що не вдалось визначити з CRM/тексту/rieltor.ua, питаємо в користувача.
+    У пакетному режимі (no_ask) — пропускаємо об'єкт з поясненням. True — можна публікувати."""
+    missing = payload.get("_missing") or []
+    if not missing:
+        return True
+    art = crm.get("article") or ""
+    if no_ask:
+        bp.result(False, f"rieltor: {art} квартира — не вдалось визначити: "
+                         f"{', '.join(m['label'] for m in missing)} — пропущено "
+                         f"(викладіть її окремо, бот спитає)")
+        return False
+    for m in missing:
+        key, label, kind = m["key"], m["label"], m["kind"]
+        if kind == "choice":
+            k, v = bp.ask_choice(f"{label} — у CRM не вказано. Оберіть:", [(val, name) for val, name in m["options"]])
+            if k != "opt":
+                bp.result(False, f"rieltor: без поля «{label}» квартиру не опублікувати — скасовано")
+                return False
+            payload[key] = v
+        elif kind == "district":
+            opts = [(d["districtId"], d["name"]) for d in m.get("options") or []]
+            if not opts and payload.get("cityId"):
+                opts = [(int(d["districtId"]), d["name"]) for d in client.search_districts(payload["cityId"])]
+            k, v = bp.ask_choice("Не вдалось визначити район на rieltor.ua. Оберіть:", opts)
+            if k != "opt":
+                bp.result(False, "rieltor: без району квартиру не опублікувати — скасовано")
+                return False
+            payload["districtId"] = v
+        else:
+            while True:
+                v = bp.ask_text(f"{label} — у CRM і в описі не знайшов. Вкажіть число")
+                if v is None:
+                    bp.result(False, f"rieltor: без поля «{label}» квартиру не опублікувати — скасовано")
+                    return False
+                num = R.to_number_str(v.replace(",", "."))
+                if num and re.fullmatch(r"\d+(\.\d+)?", num):
+                    break
+                bp.info("Потрібне число, наприклад 3 або 54.5")
+            payload[key] = num if kind == "area" else num.split(".")[0]
+            if key == "commonArea":      # площі житлова/кухня — за правилом 40%/20%
+                c = float(num)
+                payload.setdefault("usefulArea", R._fmt_area(c * 0.40))
+                payload.setdefault("kitchenArea", R._fmt_area(c * 0.20))
+    return True
+
+
 def cmd_post(a):
     cookie = load_cookie()
     crm = fetch_estate_data(a.url)
@@ -105,6 +153,9 @@ def cmd_post(a):
     client = RieltorGeoClient(cookie)
     payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False,
                               item_type_override=item_type_override)
+
+    if payload.get("itemType") == 1 and not resolve_missing_flat(payload, client, crm, a.no_ask):
+        return
 
     # Продаж ділянки без кадастрового номера в описі CRM — не питаємо, одразу пропускаємо
     # (при масовому завантаженні землі нема часу перевіряти кожен об'єкт вручну)
