@@ -416,7 +416,8 @@ def parse_area(v):
 
 
 def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | None = None,
-                   upload_photos_flag: bool = False, item_type_override: int | None = None) -> dict:
+                   upload_photos_flag: bool = False, item_type_override: int | None = None,
+                   address_override: dict | None = None) -> dict:
     oper_type, item_type = parse_deal_title(crm["deal_title"])
     crm_type_label = crm["deal_title"].split("/", 1)[1].strip().lower() if "/" in crm["deal_title"] else ""
     unknown_crm_type = False
@@ -519,9 +520,16 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
     addr = parse_address(crm.get("address", ""))
     geo = {"regionId": None, "cityId": None, "districtId": None, "streetId": None,
            "houseId": None, "newhouseId": None, "ptolemyHouseId": None, "matched": False}
+    ov = address_override or {}
+    if ov.get("street"):
+        addr["street"] = ov["street"]
+    if ov.get("house"):
+        addr["house"] = ov["house"]
     if geo_client and addr["city"]:
         complex_name = params.get("Комплекс")
         if complex_name and "не жк" in complex_name.lower():
+            complex_name = None
+        if ov:                    # адресу виправлено вручну — ЖК з CRM більше не довіряємо
             complex_name = None
         geo = resolve_address(
             geo_client,
@@ -531,6 +539,7 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             district_query=normalize_district_name(addr["district"]),
             complex_query=complex_name,
             fix_district=(item_type == 1),
+            district_id_override=ov.get("district_id"),
         )
 
     if geo.get("matched"):

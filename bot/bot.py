@@ -463,10 +463,61 @@ async def confirm_publish(chat_id, ctx):
     extra = ""
     if "domria" in s["selected"]:
         extra = f"\n📎 Техпаспорт: {len(tp)} файл(ів)" if tp else "\n📎 Без техпаспорта — на dom.ria буде чернетка"
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Опублікувати", callback_data="publish")],
-                               [InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")]])
+    rows = [[InlineKeyboardButton("🚀 Опублікувати", callback_data="publish")]]
+    if "rieltor" in s["selected"]:
+        rows.append([InlineKeyboardButton("📍 Змінити адресу", callback_data="addr_edit")])
+        ad = s.get("addr") or {}
+        if ad:
+            parts = [x for x in (ad.get("district_name"), ad.get("street"),
+                                 ("буд. " + ad["house"]) if ad.get("house") else None) if x]
+            extra += f"\n📍 Адреса для rieltor.ua (виправлено): {esc(', '.join(parts))}"
+    rows.append([InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")])
+    kb = InlineKeyboardMarkup(rows)
     await ctx.bot.send_message(chat_id, f"{s['summary']}\n\nКуди: <b>{esc(names)}</b>{extra}",
                                parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+# ------------------------------------------------------------------ зміна адреси (rieltor)
+async def start_addr_edit(chat_id, ctx):
+    s = st(ctx)
+    msg = await ctx.bot.send_message(chat_id, "🔎 Завантажую райони…")
+
+    async def _noop(*a, **k):
+        return {}
+    res = await D.run("rieltor", ["districts", "--url", s["url"]], _noop, _noop)
+    if not res.get("ok"):
+        await msg.edit_text(f"❌ {cut(res.get('text'), 300)}")
+        return await confirm_publish(chat_id, ctx)
+    districts = res.get("districts") or []
+    s["addr"] = {}
+    s["addr_districts"] = {int(i): n for i, n in districts}
+    if not districts:                     # місто без районів — одразу вулиця
+        return await ask_addr_street(chat_id, ctx)
+    s["mode"] = "addr_district"
+    rows = [[InlineKeyboardButton(n, callback_data=f"ad:{i}")] for i, n in districts]
+    rows.append([InlineKeyboardButton("Район без змін", callback_data="ad:0")])
+    await msg.edit_text("Оберіть район:", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def ask_addr_street(chat_id, ctx):
+    st(ctx)["mode"] = "addr_street"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Вулиця без змін", callback_data="addr_skip")]])
+    await ctx.bot.send_message(chat_id, "Введіть вулицю (текстом, як на rieltor.ua, напр. «Василя Тютюнника»):",
+                               reply_markup=kb)
+
+
+async def ask_addr_house(chat_id, ctx):
+    st(ctx)["mode"] = "addr_house"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("Номер без змін", callback_data="addr_skip")]])
+    await ctx.bot.send_message(chat_id, "Введіть номер будинку:", reply_markup=kb)
+
+
+async def addr_next(chat_id, ctx):
+    """Після кроку (введено або пропущено) — наступний; після будинку — назад до підтвердження."""
+    s = st(ctx)
+    if s.get("mode") == "addr_street":
+        return await ask_addr_house(chat_id, ctx)
+    return await confirm_publish(chat_id, ctx)
 
 
 async def do_publish(chat_id, ctx):
@@ -478,6 +529,14 @@ async def do_publish(chat_id, ctx):
             argv = ["post", "--url", s["url"]]
             if reg[key].get("needs_techpassport") and s.get("files"):
                 argv += ["--techpassport", *s["files"]]
+            if key == "rieltor" and s.get("addr"):
+                ad = s["addr"]
+                if ad.get("district_id"):
+                    argv += ["--district-id", str(ad["district_id"])]
+                if ad.get("street"):
+                    argv += ["--street", ad["street"]]
+                if ad.get("house"):
+                    argv += ["--house", ad["house"]]
             await run_board(ctx, chat_id, key, argv)
     finally:
         ctx.application.bot_data["busy"] = False
@@ -626,6 +685,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await got_url(update, ctx, m.group(0))
     if mode and mode.startswith("await_cookie:"):
         return await save_cookie(update, ctx, mode.split(":", 1)[1], text)
+    if mode == "addr_street":
+        s.setdefault("addr", {})["street"] = text
+        return await addr_next(update.effective_chat.id, ctx)
+    if mode == "addr_house":
+        s.setdefault("addr", {})["house"] = text
+        return await addr_next(update.effective_chat.id, ctx)
     if mode == "await_tp_id":
         if not text.isdigit():
             return await update.message.reply_text("Надішліть номер оголошення dom.ria (тільки цифри).")
@@ -765,6 +830,22 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reset(ctx)
             return
         return await confirm_publish(chat_id, ctx)
+
+    if data == "addr_edit" and s.get("mode") == "confirm":
+        await q.edit_message_reply_markup(None)
+        return await start_addr_edit(chat_id, ctx)
+
+    if data.startswith("ad:") and s.get("mode") == "addr_district":
+        did = int(data[3:])
+        await q.edit_message_reply_markup(None)
+        if did:
+            s.setdefault("addr", {})["district_id"] = did
+            s["addr"]["district_name"] = s.get("addr_districts", {}).get(did)
+        return await ask_addr_street(chat_id, ctx)
+
+    if data == "addr_skip" and s.get("mode") in ("addr_street", "addr_house"):
+        await q.edit_message_reply_markup(None)
+        return await addr_next(chat_id, ctx)
 
     if data == "publish" and s.get("mode") == "confirm":
         if ctx.application.bot_data.get("busy"):

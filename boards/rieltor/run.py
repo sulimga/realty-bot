@@ -151,8 +151,10 @@ def cmd_post(a):
     item_type_override = check_land_category(crm)
 
     client = RieltorGeoClient(cookie)
+    address_override = {k: v for k, v in (("district_id", a.district_id), ("street", a.street),
+                                          ("house", a.house)) if v} or None
     payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False,
-                              item_type_override=item_type_override)
+                              item_type_override=item_type_override, address_override=address_override)
 
     if payload.get("itemType") == 1 and not resolve_missing_flat(payload, client, crm, a.no_ask):
         return
@@ -218,6 +220,21 @@ def cmd_post(a):
         bp.result(False, f"rieltor: сервер повернув помилку {resp.status_code}: {str(body)[:500]}")
 
 
+def cmd_districts(a):
+    """Для кнопки «Змінити адресу» в боті: райони міста цього об'єкта (ім'я міста — з адреси CRM)."""
+    cookie = load_cookie()
+    crm = fetch_estate_data(a.url)
+    city_q = R.parse_address(crm.get("address", ""))["city"]
+    client = RieltorGeoClient(cookie)
+    cities = client.search_cities(city_q) if city_q else []
+    if not cities:
+        bp.result(False, f"rieltor: не знайшов місто «{city_q}» на rieltor.ua")
+        return
+    city = cities[0]
+    districts = client.search_districts(int(city["cityId"])) if city.get("hasDistricts") else []
+    bp.result(True, "ok", city=city_q, districts=[[int(d["districtId"]), d["name"]] for d in districts])
+
+
 def cmd_refresh(a):
     import rieltor_refresh_dates as RF
     cookie = load_cookie()
@@ -258,6 +275,11 @@ def main():
     p.add_argument("--url", required=True)
     p.add_argument("--techpassport", nargs="*", default=[])   # rieltor не потребує — ігноруємо
     p.add_argument("--no-ask", action="store_true")            # пакетний режим: нічого не питати
+    p.add_argument("--district-id", type=int)                  # адреса, виправлена вручну в боті
+    p.add_argument("--street")
+    p.add_argument("--house")
+    d = sub.add_parser("districts")
+    d.add_argument("--url", required=True)
     import rieltor_refresh_dates as RF
     r = sub.add_parser("refresh")
     r.add_argument("--all", action="store_true")
@@ -266,7 +288,7 @@ def main():
     sub.add_parser("check")
     a = ap.parse_args()
     try:
-        {"post": cmd_post, "refresh": cmd_refresh, "check": cmd_check}[a.cmd](a)
+        {"post": cmd_post, "refresh": cmd_refresh, "check": cmd_check, "districts": cmd_districts}[a.cmd](a)
     except CookieMissing as e:
         bp.result(False, f"rieltor: {e}", stop_batch=True)
     except RateLimitExhausted as e:

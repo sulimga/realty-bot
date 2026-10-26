@@ -148,6 +148,7 @@ def resolve_address(
     district_query: str | None = None,
     complex_query: str | None = None,
     fix_district: bool = False,
+    district_id_override: int | None = None,
 ) -> dict:
     """
     Повертає словник із ключами, готовими лягти прямо в payload /api/offers/:
@@ -240,7 +241,11 @@ def resolve_address(
 
     # --- Крок 3: район (звичайний шлях, без ЖК) ---
     district_id = None
-    if has_districts and district_query:
+    if district_id_override:                 # користувач сам обрав район у боті
+        district_id = int(district_id_override)
+        result["districtId"] = district_id
+        fix_district = False
+    elif has_districts and district_query:
         districts = client.search_districts(result["cityId"])
         match = next((d for d in districts if district_query.lower() in d["name"].lower()), None)
         if match:
