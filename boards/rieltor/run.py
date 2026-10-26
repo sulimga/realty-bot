@@ -105,6 +105,21 @@ def resolve_missing_flat(payload, client, crm, no_ask):
                 bp.result(False, f"rieltor: без поля «{label}» квартиру не опублікувати — скасовано")
                 return False
             payload[key] = v
+        elif kind == "areas":
+            bp.info(label)
+            while True:
+                vals = []
+                for name in ("Загальна площа, м²", "Житлова площа, м²", "Площа кухні, м²"):
+                    v = bp.ask_text(f"{name} (число)")
+                    num = R.to_number_str((v or "").replace(",", "."))
+                    if not (v and num and re.fullmatch(r"\d+(\.\d+)?", num)):
+                        bp.result(False, "rieltor: без правильних площ квартиру не опублікувати — скасовано")
+                        return False
+                    vals.append(float(num))
+                if vals[1] + vals[2] <= vals[0]:
+                    break
+                bp.info("Загальна площа має бути не меншою за суму житлової і кухні — введіть ще раз")
+            payload["commonArea"], payload["usefulArea"], payload["kitchenArea"] = (R._fmt_area(x) for x in vals)
         elif kind == "district":
             opts = [(d["districtId"], d["name"]) for d in m.get("options") or []]
             if not opts and payload.get("cityId"):

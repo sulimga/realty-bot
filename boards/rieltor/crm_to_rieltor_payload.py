@@ -353,6 +353,11 @@ def fill_flat(payload: dict, crm: dict, params: dict, geo: dict) -> list:
         kitchen = parse_area(get_param(params, "Площа кухні,м²", "Площадь кухни,м²"))
         payload["usefulArea"] = _fmt_area(useful if useful else common * 0.40)
         payload["kitchenArea"] = _fmt_area(kitchen if kitchen else common * 0.20)
+        # rieltor.ua: загальна не може бути меншою за суму житлової і кухні
+        if float(payload["usefulArea"]) + float(payload["kitchenArea"]) > float(payload["commonArea"]):
+            missing.append({"key": "areas", "kind": "areas",
+                            "label": f"Площі: у CRM загальна {payload['commonArea']}, житлова "
+                                     f"{payload['usefulArea']}, кухня {payload['kitchenArea']} — сума більша за загальну"})
     else:
         missing.append({"key": "commonArea", "label": "Загальна площа, м²", "kind": "area"})
 
