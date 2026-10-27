@@ -413,6 +413,42 @@ def fill_flat(payload: dict, crm: dict, params: dict, geo: dict) -> list:
     return missing
 
 
+def fill_other(payload: dict, item_type: int, geo: dict) -> list:
+    """Будинок / комерція / ділянка / інше: що з потрібного лишилось порожнім після розбору CRM —
+    повертаємо списком, щоб при одиночній публікації бот спитав користувача.
+    Формат як у fill_flat: [{"key", "label", "kind": "int"|"area"|"choice"|"district", ...}]."""
+    missing = []
+
+    def empty(k):
+        v = payload.get(k)
+        return v in (None, "", 0, "0")
+
+    if empty("price"):
+        missing.append({"key": "price", "label": "Ціна", "kind": "int"})
+    if empty("commonArea"):
+        missing.append({"key": "commonArea", "label": "Загальна площа" + (", соток" if item_type == 5 else ", м²"),
+                        "kind": "area"})
+    if item_type == 3:      # будинок
+        if empty("floorCnt"):
+            missing.append({"key": "floorCnt", "label": "Поверховість будинку", "kind": "int"})
+        if empty("groundArea"):
+            missing.append({"key": "groundArea", "label": "Площа ділянки, соток", "kind": "area"})
+        if empty("roomCnt"):
+            missing.append({"key": "roomCnt", "label": "Кількість кімнат", "kind": "int"})
+        if empty("commonState"):
+            missing.append({"key": "commonState", "label": "Стан (ремонт)", "kind": "choice",
+                            "options": [(1, "Без ремонту"), (2, "Частковий ремонт"), (3, "З ремонтом")]})
+    elif item_type == 4:    # комерція
+        if empty("floorCnt"):
+            missing.append({"key": "floorCnt", "label": "Поверховість будинку", "kind": "int"})
+        if not (payload.get("detailParams") or {}).get("floor"):
+            missing.append({"key": "floor", "label": "Поверх", "kind": "int"})
+    if geo.get("has_districts") and not payload.get("districtId"):
+        missing.append({"key": "districtId", "label": "Район", "kind": "district",
+                        "options": geo.get("district_candidates") or []})
+    return missing
+
+
 def parse_area(v):
     if v is None:
         return None
@@ -572,6 +608,8 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
 
     if item_type == 1:
         payload["_missing"] = fill_flat(payload, crm, params, geo)
+    else:
+        payload["_missing"] = fill_other(payload, item_type, geo)
 
     payload["_geo_debug"] = geo  # діагностика, прибрати перед реальною відправкою
     payload["_parsed_address"] = addr
