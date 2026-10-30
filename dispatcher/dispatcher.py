@@ -10,6 +10,8 @@
 import asyncio
 import json
 import os
+import re
+import signal
 import sys
 import time
 
@@ -18,6 +20,39 @@ DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 REGISTRY = os.path.join(ROOT, "dispatcher", "boards.json")
 ASK_TIMEOUT = 15 * 60          # скільки чекати відповіді на питання, сек
 JOURNAL = os.path.join(DATA, "journal.jsonl")
+FRAME_RE = re.compile(r'File "([^"]+)", line (\d+) in (\S+)')
+NET_HINTS = ("ssl.py", "socket.py", "/urllib3/", "/http/client.py", "/requests/", "curl_cffi")
+
+
+def _is_project_file(path):
+    p = os.path.abspath(path)
+    return p.startswith(ROOT + os.sep) and "/.venv/" not in p and "site-packages" not in p
+
+
+def where_stuck(stack_text):
+    """З дампу faulthandler (найсвіжіший виклик першим) — коротко: де зависла програма."""
+    frames = FRAME_RE.findall(stack_text or "")
+    if not frames:
+        return ""
+    own = [f"{os.path.basename(f)}:{ln} {fn}" for f, ln, fn in frames if _is_project_file(f)][:3]
+    inner = frames[0][0]
+    if not _is_project_file(inner) and any(h in inner for h in NET_HINTS):
+        own.insert(0, "чекала відповіді сайту")
+    return " ← ".join(own)
+
+
+async def _dump_stack(proc, stderr_path, start_pos):
+    """Попросити програму записати свій стек у stderr-лог (SIGUSR1 → faulthandler) і прочитати його."""
+    if not hasattr(signal, "SIGUSR1"):
+        return ""
+    try:
+        proc.send_signal(signal.SIGUSR1)
+        await asyncio.sleep(1.5)
+        with open(stderr_path, encoding="utf-8", errors="replace") as f:
+            f.seek(start_pos)
+            return where_stuck(f.read())
+    except (ProcessLookupError, OSError):
+        return ""
 
 
 def boards(enabled_only=True):
@@ -70,6 +105,7 @@ async def run(board_key, argv, on_info, on_ask):
     with open(stderr_path, "a", encoding="utf-8") as errf:
         errf.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(argv)}\n")
         errf.flush()
+        start_pos = errf.tell()
         proc = await asyncio.create_subprocess_exec(
             sys.executable, entry, *argv, cwd=workdir, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=errf,
@@ -112,9 +148,12 @@ async def run(board_key, argv, on_info, on_ask):
             while not reader.done():
                 await asyncio.wait({reader}, timeout=5)
                 if time.monotonic() > deadline and not reader.done():
+                    stuck = await _dump_stack(proc, stderr_path, start_pos)
                     proc.kill()
                     reader.cancel()
-                    result = {"ok": False, "text": f"{b['title']}: програма працювала задовго — зупинено"}
+                    mins = int(float(b.get("timeout_min", 25)))
+                    result = {"ok": False, "text": f"{b['title']}: програма працювала задовго ({mins} хв) — зупинено"
+                                                   + (f"\nЗависла на: {stuck}" if stuck else "")}
                     break
             await proc.wait()
         except asyncio.CancelledError:

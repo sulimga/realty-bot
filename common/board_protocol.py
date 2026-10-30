@@ -23,34 +23,70 @@ print() перехоплюється і перетворюється на "info"
 питання ставляться звичайним input().
 """
 
+import atexit
 import builtins
+import faulthandler
 import json
+import signal
 import sys
+import threading
 
 _real_stdout = sys.stdout
 _ask_counter = 0
 _pending_info = []
+_lock = threading.RLock()
+_flush_timer = None
+FLUSH_AFTER = 2.0          # сек: накопичене відправляється не пізніше ніж через стільки (навіть якщо програма зависла)
 INTERACTIVE = sys.stdin is not None and sys.stdin.isatty()
+
+# Диспетчер перед примусовою зупинкою надсилає SIGUSR1 — програма пише в stderr (лог), на якому рядку коду
+# вона чекала. Так видно, де саме зависло (запит до сайту, очікування ліміту тощо).
+if hasattr(signal, "SIGUSR1"):
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=False)
+    except (ValueError, RuntimeError, OSError):
+        pass
 
 
 def _emit(obj):
-    _real_stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    _real_stdout.flush()
+    with _lock:
+        _real_stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        _real_stdout.flush()
+
+
+def _cancel_timer():
+    global _flush_timer
+    if _flush_timer is not None:
+        _flush_timer.cancel()
+        _flush_timer = None
 
 
 def flush_info():
     """Відправити накопичені повідомлення одним блоком."""
     global _pending_info
-    text = "\n".join(_pending_info).strip()
-    _pending_info = []
-    if text:
-        _emit({"type": "info", "text": text})
+    with _lock:
+        _cancel_timer()
+        text = "\n".join(_pending_info).strip()
+        _pending_info = []
+        if text:
+            _emit({"type": "info", "text": text})
+
+
+atexit.register(flush_info)       # якщо програма завершилась без result — не губимо останні рядки
 
 
 def info(text):
-    _pending_info.append(str(text))
-    if len(_pending_info) >= 25:
-        flush_info()
+    """Рядки збираються в блок (до 25) і відправляються не пізніше ніж за FLUSH_AFTER секунд —
+    щоб у чаті було видно хід роботи навіть тоді, коли програма далі довго чекає на сайт."""
+    global _flush_timer
+    with _lock:
+        _pending_info.append(str(text))
+        if len(_pending_info) >= 25:
+            flush_info()
+        elif _flush_timer is None:
+            _flush_timer = threading.Timer(FLUSH_AFTER, flush_info)
+            _flush_timer.daemon = True
+            _flush_timer.start()
 
 
 def _protocol_print(*args, sep=" ", end="\n", file=None, flush=False):
@@ -94,8 +130,10 @@ def ask_choice(text, options=None, allow_text=False):
             p(f"   Введіть число від 1 до {len(options)}")
 
     _ask_counter += 1
-    context = "\n".join(_pending_info).strip()
-    _pending_info.clear()
+    with _lock:
+        _cancel_timer()
+        context = "\n".join(_pending_info).strip()
+        _pending_info.clear()
     full = (context + "\n\n" + text).strip() if context else text
     _emit({"type": "ask", "id": _ask_counter, "text": full,
            "options": [str(label) for _, label in options] or None,
