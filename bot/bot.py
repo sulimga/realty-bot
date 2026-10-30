@@ -7,6 +7,7 @@ Telegram-бот — тільки інтерфейс. Про сайти нічо�
 """
 
 import asyncio
+import glob
 import html
 import json
 import logging
@@ -34,6 +35,11 @@ SECRETS = os.path.join(DATA, "secrets")
 OWNER_FILE = os.path.join(DATA, "owner.json")
 BATCH_PAUSE = 5          # пауза між оголошеннями в пакеті, сек
 STARTED_AT = time.time()
+# Слот для іншої людини (deploy/add-instance.sh пише REALTY_INSTANCE=<ім'я>); порожньо — головний бот.
+# Команди керування слотами (/newbot, /bots, /delbot) є лише в головному боті.
+INSTANCE = os.environ.get("REALTY_INSTANCE", "").strip()
+SLOT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
+TOKEN_RE = re.compile(r"\b\d{5,}:[A-Za-z0-9_-]{30,}")
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -261,8 +267,8 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:  # noqa: BLE001
         ver = "?"
     up = int(time.time() - STARTED_AT)
-    lines = [f"Версія коду: {ver or '?'}", f"Працює: {up // 3600} год {up % 3600 // 60} хв", "",
-             "Cookie:"]
+    lines = ([f"Слот: {INSTANCE}"] if INSTANCE else []) + \
+        [f"Версія коду: {ver or '?'}", f"Працює: {up // 3600} год {up % 3600 // 60} хв", "", "Cookie:"]
     for key, b in D.boards().items():
         paths = [os.path.join(SECRETS, f"{key}_{n}.txt") for n in ("cookies", "auth")]
         mt = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
@@ -646,6 +652,192 @@ async def save_cookie(update, ctx, board_key, text):
     await run_board(ctx, update.effective_chat.id, board_key, ["check"])
 
 
+# ------------------------------------------------------------------ слоти для інших людей (лише головний бот)
+# Слот = окремий Telegram-бот із власним кодом, venv, даними й сервісом systemd (deploy/add-instance.sh).
+# Головний бот лише запускає скрипти через sudo; сам код слотів про головний нічого не знає.
+def slots():
+    """[(ім'я, стан сервісу, версія коду)] для слотів, створених add-instance.sh."""
+    out = []
+    for p in sorted(glob.glob("/etc/realty-bot-*.env")):
+        name = os.path.basename(p)[len("realty-bot-"):-len(".env")]
+        if not SLOT_RE.match(name):
+            continue
+        try:
+            active = subprocess.run(["systemctl", "is-active", f"realty-bot-{name}"],
+                                    capture_output=True, text=True, timeout=5).stdout.strip() or "?"
+        except Exception:  # noqa: BLE001
+            active = "?"
+        try:
+            ver = subprocess.run(["git", "-C", f"/opt/realty-bot-{name}", "log", "-1", "--format=%h %cd",
+                                  "--date=format:%d.%m %H:%M"], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:  # noqa: BLE001
+            ver = ""
+        out.append((name, active, ver))
+    return out
+
+
+async def run_root_script(ctx, chat_id, title, argv, stdin_text=""):
+    """deploy/*.sh через `sudo -n` (без пароля); вивід — одним живим повідомленням. Повертає код виходу."""
+    if INSTANCE:                               # зі слота керувати сервером не можна
+        return 1
+    live = LiveLog(ctx.bot, chat_id, title)
+    await live.flush()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "sudo", "-n", "bash", *argv, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    except Exception as e:  # noqa: BLE001
+        await live.add(f"Не вдалося запустити: {e}")
+        await live.flush()
+        return 1
+    proc.stdin.write(stdin_text.encode("utf-8"))
+    await proc.stdin.drain()
+    proc.stdin.close()
+
+    async def pump():
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace")
+            if "password is required" in line or "terminal is required" in line:
+                line = "Немає прав sudo без пароля — цей крок доведеться зробити через SSH (див. README)."
+            await live.add(TOKEN_RE.sub("<токен>", line))
+
+    try:
+        await asyncio.wait_for(pump(), timeout=900)
+        rc = await proc.wait()
+    except asyncio.TimeoutError:
+        proc.kill()
+        rc = 124
+        await live.add("Перевищено час очікування (15 хв).")
+    await live.flush()
+    return rc
+
+
+async def cmd_bots(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        return
+    items = slots()
+    if not items:
+        return await update.message.reply_text("Окремих слотів немає. Створити: /newbot")
+    lines = ["Слоти:"]
+    for name, active, ver in items:
+        icon = "🟢" if active == "active" else "🔴"
+        lines.append(f"{icon} {name} — {active}" + (f", код {ver}" if ver else ""))
+    lines += ["", "Новий: /newbot · Видалити: /delbot"]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_newbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        return
+    if ctx.application.bot_data.get("busy"):
+        return await update.message.reply_text("Зачекайте, іде інша дія.")
+    reset(ctx)
+    st(ctx)["mode"] = "nb_name"
+    await update.message.reply_text(
+        "Новий слот — окремий бот для іншої людини: свої cookie, дані, журнал і /update. "
+        "Твій бот і твої дані не зачіпаються.\n\n"
+        "Як назвати слот? Латиницею малими літерами, напр. <code>anna</code>. Скасувати: /cancel",
+        parse_mode=ParseMode.HTML)
+
+
+async def nb_got_name(update, ctx, text):
+    name = text.strip().lower()
+    if not SLOT_RE.match(name):
+        return await update.message.reply_text("Лише латиниця малими, цифри, дефіс (до 20 символів). Ще раз:")
+    if any(n == name for n, _, _ in slots()) or os.path.exists(f"/opt/realty-bot-{name}"):
+        return await update.message.reply_text(f"Слот «{name}» уже є. Інше ім'я:")
+    s = st(ctx)
+    s["nb_name"], s["mode"] = name, "nb_token"
+    await update.message.reply_text(
+        "Тепер токен НОВОГО бота:\n"
+        "1. У Telegram відкрийте @BotFather → /newbot → назва і username (має закінчуватися на bot).\n"
+        "2. Скопіюйте токен (вигляд 123456789:AAE…) і надішліть сюди.\n"
+        "Повідомлення з токеном я одразу видалю з чату.")
+
+
+async def nb_got_token(update, ctx, text):
+    chat_id = update.effective_chat.id
+    m = TOKEN_RE.search(text)
+    try:
+        await update.message.delete()          # не тримаємо токен в історії чату
+    except BadRequest:
+        pass
+    if not m:
+        return await ctx.bot.send_message(chat_id, "Не схоже на токен (вигляд 123456789:AAE…). Надішліть ще раз.")
+    if m.group(0).split(":")[0] == os.environ.get("TELEGRAM_TOKEN", "").split(":")[0]:
+        return await ctx.bot.send_message(chat_id, "Це токен цього самого бота. Потрібен НОВИЙ бот з @BotFather.")
+    s = st(ctx)
+    s["nb_token"], s["mode"] = m.group(0), "nb_owner"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Пропустити", callback_data="nb_skip"),
+                                InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")]])
+    await ctx.bot.send_message(
+        chat_id,
+        "🔑 Токен отримано, повідомлення видалено.\n\n"
+        "Telegram id власника слота — щоб новий бот слухався лише цієї людини. "
+        "Вона може дізнатися свій id, надіславши /id цьому боту.\n"
+        "Або «Пропустити» — тоді власником стане той, хто ПЕРШИМ надішле /start новому боту.",
+        reply_markup=kb)
+
+
+async def nb_got_owner(update, ctx, text):
+    if not text.strip().isdigit():
+        return await update.message.reply_text("Надішліть id (лише цифри) або натисніть «Пропустити».")
+    st(ctx)["nb_owner"] = text.strip()
+    return await nb_confirm(update.effective_chat.id, ctx)
+
+
+async def nb_confirm(chat_id, ctx):
+    s = st(ctx)
+    s["mode"] = "nb_confirm"
+    owner = s.get("nb_owner")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Створити", callback_data="nb_go"),
+                                InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")]])
+    await ctx.bot.send_message(
+        chat_id,
+        f"Створити слот <b>{esc(s['nb_name'])}</b>?\n"
+        f"Власник: {('id ' + esc(owner)) if owner else 'хто першим надішле /start'}\n"
+        "Займе 1–3 хвилини. Твій бот у цей час працює як звичайно.",
+        parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def nb_go(chat_id, ctx):
+    s = st(ctx)
+    name, token, owner = s["nb_name"], s["nb_token"], s.get("nb_owner") or ""
+    reset(ctx)                                  # токен більше не тримаємо в пам'яті бота
+    ctx.application.bot_data["busy"] = True
+    try:
+        rc = await run_root_script(ctx, chat_id, f"🧩 <b>Новий слот {esc(name)}</b>",
+                                   [os.path.join(ROOT, "deploy", "add-instance.sh"), name], f"{token}\n{owner}\n")
+    finally:
+        ctx.application.bot_data["busy"] = False
+    await ctx.bot.send_message(chat_id, "✅ Готово. Усі слоти: /bots" if rc == 0
+                               else "❌ Слот не створено — причина в повідомленні вище.", reply_markup=MENU)
+
+
+async def cmd_delbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        return
+    items = slots()
+    if not items:
+        return await update.message.reply_text("Окремих слотів немає.")
+    reset(ctx)
+    st(ctx)["mode"] = "db_choose"
+    rows = [[InlineKeyboardButton(f"🗑 {n}", callback_data=f"db:{n}")] for n, _, _ in items]
+    rows.append([InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")])
+    await update.message.reply_text("Який слот видалити?", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def db_go(chat_id, ctx, name):
+    reset(ctx)
+    ctx.application.bot_data["busy"] = True
+    try:
+        rc = await run_root_script(ctx, chat_id, f"🗑 <b>Видалення слота {esc(name)}</b>",
+                                   [os.path.join(ROOT, "deploy", "remove-instance.sh"), name])
+    finally:
+        ctx.application.bot_data["busy"] = False
+    await ctx.bot.send_message(chat_id, "Готово." if rc == 0 else "❌ Не вдалося — причина вище.", reply_markup=MENU)
+
+
 # ------------------------------------------------------------------ обробники
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
@@ -702,6 +894,19 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Надішліть номер оголошення dom.ria (тільки цифри).")
         s["tp_realty_id"] = text
         return await ask_techpassport(update.effective_chat.id, ctx)
+    if mode == "nb_name":
+        if TOKEN_RE.search(text):              # токен надіслали раніше часу — не залишаємо його в чаті
+            try:
+                await update.message.delete()
+            except BadRequest:
+                pass
+            return await ctx.bot.send_message(update.effective_chat.id,
+                                              "Спершу ім'я слота (латиницею), токен — наступним кроком.")
+        return await nb_got_name(update, ctx, text)
+    if mode == "nb_token":
+        return await nb_got_token(update, ctx, text)
+    if mode == "nb_owner":
+        return await nb_got_owner(update, ctx, text)
 
     if re.match(r"https?://", text):       # просто кинули посилання — одразу починаємо
         reset(ctx)
@@ -864,6 +1069,35 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         return await ask_techpassport(chat_id, ctx)
 
+    if data == "nb_skip" and s.get("mode") == "nb_owner":
+        s["nb_owner"] = ""
+        await q.edit_message_reply_markup(None)
+        return await nb_confirm(chat_id, ctx)
+
+    if data == "nb_go" and s.get("mode") == "nb_confirm":
+        if ctx.application.bot_data.get("busy"):
+            return await ctx.bot.send_message(chat_id, "Зачекайте, іде інша дія.")
+        await q.edit_message_reply_markup(None)
+        return await nb_go(chat_id, ctx)
+
+    if data.startswith("db:") and s.get("mode") == "db_choose":
+        name = data[3:]
+        if not SLOT_RE.match(name):
+            return
+        s["db_name"], s["mode"] = name, "db_confirm"
+        await q.edit_message_reply_markup(None)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🗑 Так, видалити {name}", callback_data="db_go")],
+                                   [InlineKeyboardButton("✖️ Скасувати", callback_data="cancel")]])
+        return await ctx.bot.send_message(
+            chat_id, f"Видалити слот «{name}»? Його бот зупиниться, код і налаштування буде видалено. "
+                     "Дані слота (cookie, журнал) залишаться на сервері.", reply_markup=kb)
+
+    if data == "db_go" and s.get("mode") == "db_confirm":
+        if ctx.application.bot_data.get("busy"):
+            return await ctx.bot.send_message(chat_id, "Зачекайте, іде інша дія.")
+        await q.edit_message_reply_markup(None)
+        return await db_go(chat_id, ctx, s["db_name"])
+
     if data.startswith("ck:"):
         key = data[3:]
         s["mode"] = f"await_cookie:{key}"
@@ -899,11 +1133,15 @@ def main():
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("status", show_status))
+    if not INSTANCE:                           # керування слотами — лише в головному боті
+        app.add_handler(CommandHandler("newbot", cmd_newbot))
+        app.add_handler(CommandHandler("bots", cmd_bots))
+        app.add_handler(CommandHandler("delbot", cmd_delbot))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, on_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)
-    log.info("Бот запущено. Дані: %s", DATA)
+    log.info("Бот запущено%s. Дані: %s", f" (слот {INSTANCE})" if INSTANCE else "", DATA)
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 

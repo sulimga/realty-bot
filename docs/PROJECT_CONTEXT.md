@@ -1,4 +1,4 @@
-# Довідка проєкту «Постер нерухомості» (стан на 21.10.2026)
+# Довідка проєкту «Постер нерухомості» (стан на 30.10.2026)
 
 ## 1. Що це
 Telegram-бот (приватний, слухається лише власника), який бере об'єкт із RealtSoft CRM
@@ -17,7 +17,8 @@ boards/rieltor/       програма rieltor.ua (crm_to_rieltor_payload.py, ri
 boards/olx/           програма OLX (olx_client.py, mapping.py, run.py)
 crm/extract_estate.py парсер презентації CRM (спільний)
 common/board_protocol.py  протокол між диспетчером і програмами сайтів
-deploy/               cloud-init.yaml, install.sh, update.sh, realty-bot.service
+deploy/               cloud-init.yaml, install.sh, update.sh, realty-bot.service,
+                      add-instance.sh / remove-instance.sh (слоти для інших людей, розділ 3)
 ```
 **Протокол** (stdout/stdin, JSON по рядку):
 `{"type":"info","text"}` · `{"type":"ask","id","text","options":[…]|null,"allow_text"}` ·
@@ -37,10 +38,21 @@ OLX ще `post --dry-run`).
   (TELEGRAM_TOKEN, REALTY_DATA_DIR). Сервіс systemd `realty-bot`.
 - У Claude немає SSH на сервер. Оновлення — команда `/update` у боті. Логи — `/logs`.
 - Стара VM (instance-20260915-1204) ще існує — видалити лише після мого «так».
+- **Слоти для інших людей** (30.10.2026): на тій самій VM можна запускати окремі копії бота для інших
+  людей — свій Telegram-бот, код `/opt/realty-bot-<ім'я>` (свій venv, свій `/update`), дані
+  `/var/lib/realty-bot-<ім'я>`, налаштування `/etc/realty-bot-<ім'я>.env` (TELEGRAM_TOKEN, REALTY_DATA_DIR,
+  `REALTY_INSTANCE=<ім'я>`, опційно OWNER_ID), сервіс `realty-bot-<ім'я>`. Код бота й програм сайтів від цього
+  не залежить (усе через REALTY_DATA_DIR і власну теку), тож мій бот і мої дані не зачіпаються.
+  Створення/видалення — `deploy/add-instance.sh <ім'я>` / `remove-instance.sh <ім'я> [--purge]` (root), або
+  з мого бота: `/newbot`, `/bots`, `/delbot` (бот запускає скрипти через `sudo -n`; ці команди є лише в головному
+  боті, де REALTY_INSTANCE порожній). add-instance перевіряє токен через getMe, не дає один бот у двох слотах,
+  при збої прибирає створене; remove лишає дані слота (без --purge). Пам'ять VM спільна (1 ГБ + swap).
+  ⚠️ На реальному сервері ще не запускалось (перевірено в пісочниці з імітацією systemd і Telegram).
 
 ## 4. Бот: меню і сценарії
 Кнопки: 📤 Викласти оголошення · 📎 Техпаспорт до чернетки · 🍪 Cookies · 🔄 Оновити дати rieltor · ℹ️ Статус.
-Команди: /start (перший — стає власником), /cancel, /update, /logs, /status, /id.
+Команди: /start (перший — стає власником), /cancel, /update, /logs, /status, /id;
+лише в головному боті — /newbot, /bots, /delbot (слоти, розділ 3).
 
 **Викласти оголошення:** спершу вибір сайтів →
 - лише rieltor: можна одне посилання, кілька (кома/рядки) або .txt → **пакет**: у фоні по черзі
@@ -193,6 +205,7 @@ URL-патерн і інший cookie, ніж публічна презента�
   і best-effort звірка категорії через CRM-адмінку (окремий cookie) (22.10.2026).
 - OLX: продаж будинків (протестовано — оголошення створюється, чекає оплати).
 - Сервер, бот, оновлення через /update, статус, cookie.
+- Слоти для інших людей на тому ж сервері: окремий бот, код, дані, сервіс; /newbot, /bots, /delbot (30.10.2026).
 
 ## 11. Плани (по порядку)
 0. Розклад: щоденне оновлення дат rieltor (раз на добу вистачає — ліміт ≈49); вирішити автооновлення токена OLX.
