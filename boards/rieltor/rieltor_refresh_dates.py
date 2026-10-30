@@ -215,6 +215,74 @@ def refresh_offer(offer_id: int, cookie: str):
     return resp.status_code, body
 
 
+# ---------- видалення ----------
+# Запит видалення потрібно підтвердити HAR-ом (оголошення rieltor: видалити / в архів).
+# Поки DELETE_REQUEST = None — бот лише показує, скільки оголошень підпадає, і нічого не видаляє.
+# Формат, коли буде відомий: {"method": "GET"|"POST", "path": "/api/offers/...", "params": {"id": "{id}", ...}}
+DELETE_REQUEST = None
+
+
+class DeleteNotConfigured(Exception):
+    pass
+
+
+def delete_offer(offer_id: int, cookie: str):
+    """Видаляє одне оголошення. → (HTTP-код, тіло відповіді)."""
+    if not DELETE_REQUEST:
+        raise DeleteNotConfigured("запит видалення ще не налаштований (потрібен HAR)")
+    fill = lambda v: v.replace("{id}", str(offer_id)) if isinstance(v, str) else v
+    params = {k: fill(v) for k, v in (DELETE_REQUEST.get("params") or {}).items()}
+    data = DELETE_REQUEST.get("json")
+    resp = requests.request(DELETE_REQUEST.get("method", "GET"), SITE_BASE_URL + DELETE_REQUEST["path"],
+                            params=params, json=data, headers=_headers(cookie), timeout=20)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text[:1000]
+    return resp.status_code, body
+
+
+def select_offers(cookie: str, category: str, oper: str):
+    """Усі активні оголошення категорії+угоди. → (список, помилка-фільтра або None)."""
+    offers = fetch_offers(cookie, log=None)
+    try:
+        return filter_offers(offers, category, oper), None
+    except FilterUnavailable as e:
+        return [], str(e)
+
+
+def delete_all(offers: list, cookie: str, log=print, delay=DELAY_BETWEEN_SECONDS, should_stop=None) -> dict:
+    res = {"total": len(offers), "ok": 0, "failed": 0, "stopped": "", "errors": [], "deleted": []}
+    fails_in_row = 0
+    for i, o in enumerate(offers, start=1):
+        oid = o.get("id")
+        try:
+            code, body = delete_offer(oid, cookie)
+        except requests.RequestException as e:
+            code, body = None, f"{type(e).__name__}: {e}"
+        if is_ok(code, body):
+            res["ok"] += 1
+            res["deleted"].append(oid)
+            fails_in_row = 0
+        elif code in (401, 403):
+            res["stopped"] = "cookie"
+            break
+        else:
+            res["failed"] += 1
+            fails_in_row += 1
+            res["errors"].append({"id": oid, "http": code, "body": error_text(body)})
+            if log:
+                log(f"№ {oid}: помилка {code}: {error_text(body)}")
+            if fails_in_row >= MAX_CONSECUTIVE_FAILS:
+                res["stopped"] = "fails"
+                break
+        if log and i % 10 == 0:
+            log(f"  оброблено {i} з {len(offers)}, видалено {res['ok']}")
+        if i < len(offers):
+            time.sleep(delay)
+    return res
+
+
 def is_ok(code, body) -> bool:
     return code == 200 and isinstance(body, dict) and str(body.get("status", "")).upper() == "OK"
 

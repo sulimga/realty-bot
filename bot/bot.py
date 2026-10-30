@@ -43,10 +43,12 @@ BTN_POST = "📤 Викласти оголошення"
 BTN_TP = "📎 Техпаспорт до чернетки"
 BTN_COOKIES = "🍪 Cookies"
 BTN_REFRESH = "🔄 Оновити дати rieltor"
+BTN_DELETE = "🗑 Видалити оголошення rieltor"
 BTN_STATUS = "ℹ️ Статус"
 MENU = ReplyKeyboardMarkup([[KeyboardButton(BTN_POST)],
                             [KeyboardButton(BTN_TP), KeyboardButton(BTN_COOKIES)],
-                            [KeyboardButton(BTN_REFRESH), KeyboardButton(BTN_STATUS)]],
+                            [KeyboardButton(BTN_REFRESH), KeyboardButton(BTN_DELETE)],
+                            [KeyboardButton(BTN_STATUS)]],
                            resize_keyboard=True)
 
 
@@ -668,6 +670,10 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if ctx.application.bot_data.get("busy"):
             return await update.message.reply_text("Зачекайте, іде інша дія.")
         return await run_board(ctx, update.effective_chat.id, "rieltor", ["refresh"])
+    if text == BTN_DELETE:
+        if ctx.application.bot_data.get("busy"):
+            return await update.message.reply_text("Зачекайте, іде інша дія.")
+        return await run_board(ctx, update.effective_chat.id, "rieltor", ["delete"])
 
     if pa and not pa["future"].done():
         if pa.get("allow_text"):

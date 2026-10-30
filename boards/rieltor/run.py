@@ -278,6 +278,51 @@ def cmd_refresh(a):
     bp.result(ok, RF.summary_text(res), stop_batch=res["stopped"] == "cookie")
 
 
+def cmd_delete(a):
+    import rieltor_refresh_dates as RF
+    cookie = load_cookie()
+    category, oper = a.category, a.oper
+    if not category:
+        kind, category = bp.ask_choice("Видалити оголошення якої категорії?",
+                                       [(k, n) for k, (n, _) in RF.CATEGORIES.items() if k != "parking"])
+        if kind != "opt":
+            bp.result(False, "rieltor: видалення скасовано")
+            return
+    if not oper:
+        kind, oper = bp.ask_choice("Продаж чи оренда?", [(k, n) for k, (n, _) in RF.OPERS.items()])
+        if kind != "opt":
+            bp.result(False, "rieltor: видалення скасовано")
+            return
+    scope = f"{RF.CATEGORIES[category][0]} / {RF.OPERS[oper][0]}"
+    bp.info(f"rieltor: шукаю активні оголошення «{scope}»…")
+    offers, err = RF.select_offers(cookie, category, oper)
+    if err:
+        bp.result(False, f"rieltor: категорію не вдалося виділити — {err}. Нічого не видалено")
+        return
+    if not offers:
+        bp.result(True, f"rieltor: активних оголошень «{scope}» немає")
+        return
+    if not RF.DELETE_REQUEST:
+        bp.result(False, f"rieltor: знайдено {len(offers)} оголошень «{scope}», але запит видалення ще не "
+                         f"налаштований — потрібен HAR видалення одного оголошення. Нічого не видалено")
+        return
+    kind, v = bp.ask_choice(f"⚠️ Видалити НАЗАВЖДИ {len(offers)} оголошень «{scope}» на rieltor.ua?",
+                            [("yes", f"Так, видалити {len(offers)}"), ("no", "Ні, скасувати")])
+    if kind != "opt" or v != "yes":
+        bp.result(False, "rieltor: видалення скасовано, нічого не видалено")
+        return
+    res = RF.delete_all(offers, cookie, log=bp.info)
+    save_log("delete", res)
+    t = f"rieltor: видалено {res['ok']} з {res['total']} оголошень «{scope}»"
+    if res["stopped"] == "cookie":
+        t += ". Зупинено: cookie застаріли (кнопка «🍪 Cookies» → rieltor)"
+    elif res["stopped"] == "fails":
+        t += f". Зупинено після {RF.MAX_CONSECUTIVE_FAILS} помилок поспіль"
+    if res["failed"]:
+        t += f". Помилок: {res['failed']}"
+    bp.result(res["stopped"] == "" and res["failed"] == 0, t)
+
+
 def cmd_check(a):
     import rieltor_refresh_dates as RF
     offers = RF.fetch_offers(load_cookie())
@@ -297,6 +342,9 @@ def main():
     d = sub.add_parser("districts")
     d.add_argument("--url", required=True)
     import rieltor_refresh_dates as RF
+    dl = sub.add_parser("delete")
+    dl.add_argument("--category", choices=list(RF.CATEGORIES))
+    dl.add_argument("--oper", choices=list(RF.OPERS))
     r = sub.add_parser("refresh")
     r.add_argument("--all", action="store_true")
     r.add_argument("--category", choices=list(RF.CATEGORIES))
@@ -304,7 +352,7 @@ def main():
     sub.add_parser("check")
     a = ap.parse_args()
     try:
-        {"post": cmd_post, "refresh": cmd_refresh, "check": cmd_check, "districts": cmd_districts}[a.cmd](a)
+        {"post": cmd_post, "refresh": cmd_refresh, "delete": cmd_delete, "check": cmd_check, "districts": cmd_districts}[a.cmd](a)
     except CookieMissing as e:
         bp.result(False, f"rieltor: {e}", stop_batch=True)
     except RateLimitExhausted as e:
