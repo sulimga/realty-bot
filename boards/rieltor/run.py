@@ -182,6 +182,7 @@ def cmd_post(a):
 
     item_type_override = check_land_category(crm)
 
+    bp.info("rieltor: шукаю адресу, район і ставку…")      # видно, якщо зависне вже на цьому кроці
     client = RieltorGeoClient(cookie)
     address_override = {k: v for k, v in (("district_id", a.district_id), ("street", a.street),
                                           ("house", a.house)) if v} or None
