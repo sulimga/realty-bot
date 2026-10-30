@@ -216,10 +216,12 @@ def refresh_offer(offer_id: int, cookie: str):
 
 
 # ---------- видалення ----------
-# Запит видалення потрібно підтвердити HAR-ом (оголошення rieltor: видалити / в архів).
-# Поки DELETE_REQUEST = None — бот лише показує, скільки оголошень підпадає, і нічого не видаляє.
-# Формат, коли буде відомий: {"method": "GET"|"POST", "path": "/api/offers/...", "params": {"id": "{id}", ...}}
-DELETE_REQUEST = None
+# Запит видалення (підтверджено HAR 30.10.2026; «в архів» — така сама дія з action=draft):
+#   GET /api/offers/item-action/?id={id}&action=delete&reason=24&userPrice=0&verification=false
+# reason=24 — значення, яке сайт сам підставив у формі видалення.
+DELETE_REQUEST = {"method": "GET", "path": "/api/offers/item-action/",
+                  "params": {"id": "{id}", "action": "delete", "reason": "24",
+                             "userPrice": "0", "verification": "false"}}
 
 
 class DeleteNotConfigured(Exception):
