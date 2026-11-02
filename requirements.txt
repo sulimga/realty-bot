@@ -4,3 +4,4 @@ lxml>=5.0
 pillow>=10.0
 python-telegram-bot==21.6
 curl_cffi>=0.7
+pymupdf>=1.24

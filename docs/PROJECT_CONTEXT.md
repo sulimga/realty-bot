@@ -91,6 +91,10 @@ URL-патерн і інший cookie, ніж публічна презента�
 - Техпаспорт: `/uploadfile/` (entity_type=techpassport) → `/v1/api/inspections/sendRealtyDataAndCreateInspectionOrder/`
   → `/node/api/publishByVideoInspection/`. З техпаспортом публікація безкоштовна. Без нього — чернетка
   (потім «📎 Техпаспорт до чернетки»). Кілька фото/тека → склеюються в один PDF (з EXIF-поворотом).
+  Великий техпаспорт dom.ria не приймає: PDF > 9 МБ автоматично стискається (`shrink_pdf`, pymupdf —
+  сторінки перемальовуються в JPEG 150→60 dpi, поки не влізе). Точний ліміт dom.ria не відомий.
+  Telegram не дає боту завантажити файл > 20 МБ (ліміт Bot API) — бот просить надіслати фото сторінок
+  або стиснути PDF. Обхід — власний сервер Bot API (не зроблено).
 - Перевірка повноти: `/node/checkIfRealtyHasMainCharacteristics`; відповідь publish перевіряється
   (`missingCharacteristics` = помилка).
 - Гео: autocompleteV3 (місто, вулиця), getPointByGeo (`ENTITY` = точний будинок, `DB` = запасний),

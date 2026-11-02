@@ -33,6 +33,7 @@ import dispatcher as D  # noqa: E402
 DATA = D.DATA
 SECRETS = os.path.join(DATA, "secrets")
 OWNER_FILE = os.path.join(DATA, "owner.json")
+TG_BOT_MAX_DOWNLOAD = 20 * 1024 * 1024   # ліміт Telegram Bot API на завантаження файлу ботом
 BATCH_PAUSE = 5          # пауза між оголошеннями в пакеті, сек
 STARTED_AT = time.time()
 # Слот для іншої людини (deploy/add-instance.sh пише REALTY_INSTANCE=<ім'я>); порожньо — головний бот.
@@ -934,6 +935,12 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if s.get("mode") != "await_files":
         return await update.message.reply_text("Файл зараз не очікується. Спершу оберіть дію в меню.")
     if msg.document:
+        if (msg.document.file_size or 0) > TG_BOT_MAX_DOWNLOAD:
+            return await msg.reply_text(
+                f"⚠️ Файл {msg.document.file_size / 1024 / 1024:.0f} МБ — Telegram не дає ботам завантажувати "
+                "файли понад 20 МБ.\nВаріанти: надішліть сторінки техпаспорта як фото (можна кілька, я сам "
+                "склею в PDF і стисну), або стисніть PDF до 20 МБ (напр. ilovepdf.com → Стиснути PDF) і "
+                "надішліть ще раз.")
         tg_file = await msg.document.get_file()
         name = msg.document.file_name or f"file_{len(s['files']) + 1}"
     else:

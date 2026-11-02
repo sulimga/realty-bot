@@ -644,6 +644,9 @@ def _cmd_post(args, cfg, report):
     print(f"\nГотово. Мої оголошення: https://dom.ria.com/v/uk/mypage")
 
 
+# dom.ria не приймає великі файли техпаспорта; точний ліміт не відомий — тримаємо запас
+TECHPASS_MAX_BYTES = 9 * 1024 * 1024
+
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 
 
@@ -681,11 +684,57 @@ def prepare_techpassport_files(paths, realty_id):
     out = []
     for p in pdfs:
         with open(p, "rb") as f:
-            out.append((os.path.basename(p), f.read(), "application/pdf"))
+            out.append((os.path.basename(p), shrink_pdf(f.read(), os.path.basename(p)), "application/pdf"))
     if images:
-        out.append((f"techpassport_{realty_id}.pdf", images_to_pdf(images), "application/pdf"))
+        data = shrink_pdf(images_to_pdf(images), "фото техпаспорта")
+        out.append((f"techpassport_{realty_id}.pdf", data, "application/pdf"))
         print(f"      {len(images)} фото техпаспорта склеєно в один PDF")
     return out
+
+
+def _mb(n):
+    return f"{n / 1024 / 1024:.1f} МБ"
+
+
+def shrink_pdf(data, label="PDF", limit=TECHPASS_MAX_BYTES):
+    """
+    Якщо PDF більший за ліміт dom.ria — перемальовує сторінки картинками JPEG
+    (техпаспорт — це скани, тож текст не втрачається) зі зниженням якості, поки не влізе.
+    """
+    if len(data) <= limit:
+        return data
+    try:
+        import pymupdf
+    except ImportError:
+        try:
+            import fitz as pymupdf
+        except ImportError:
+            raise DomRiaError(f"{label}: {_mb(len(data))} — завеликий для dom.ria, а стискання недоступне "
+                              f"(немає pymupdf на сервері — надішліть /update)")
+    print(f"      {label}: {_mb(len(data))} — завеликий для dom.ria, стискаю…")
+    src = pymupdf.open(stream=data, filetype="pdf")
+    best = data
+    for dpi, quality in ((150, 75), (120, 65), (100, 60), (85, 55), (72, 50), (60, 45)):
+        out = pymupdf.open()
+        for page in src:
+            pix = page.get_pixmap(dpi=dpi)
+            img = pix.tobytes("jpg", jpg_quality=quality)
+            r = page.rect
+            new = out.new_page(width=r.width, height=r.height)
+            new.insert_image(new.rect, stream=img)
+        buf = out.tobytes(garbage=3, deflate=True)
+        out.close()
+        if len(buf) < len(best):
+            best = buf
+        print(f"      {dpi} dpi, якість {quality}: {_mb(len(buf))}")
+        if len(buf) <= limit:
+            break
+    src.close()
+    if len(best) > limit:
+        raise DomRiaError(f"{label}: навіть після стискання {_mb(len(best))} — "
+                          f"більше ліміту dom.ria. Розділіть техпаспорт або надішліть лише потрібні сторінки")
+    print(f"      {label}: стиснуто {_mb(len(data))} → {_mb(len(best))}")
+    return best
 
 
 def images_to_pdf(images, max_side=2500):
