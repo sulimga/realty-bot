@@ -32,10 +32,12 @@ import board_protocol as bp  # noqa: E402
 
 bp.install_print_hook()
 
+import extract_estate_admin as ADM  # noqa: E402
 import mapping as M  # noqa: E402
 from olx_client import NET_ERRORS, AuthError, OlxClient, OlxError  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
+ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")   # «🍪 Cookies» → CRM (адмінка…)
 BOARD_DIR = os.path.join(DATA, "olx")
 COOKIES = os.path.join(DATA, "secrets", "olx_cookies.txt")
 AUTH = os.path.join(DATA, "secrets", "olx_auth.txt")
@@ -253,13 +255,40 @@ def describe_params(cid, params):
     return out
 
 
-def choose_category(estate):
-    oper, fam, cid, why = M.detect(estate)
-    if fam is None:
-        raise OlxError(f"«{estate.get('deal_title')}»: {why}")
+def crm_admin(estate):
+    """Категорія/тип/угода з авторизованої сторінки CRM. Best-effort: без cookie чи при помилці — None
+    (тоді визначаємо за заголовком CRM, а що не зрозуміли — питаємо)."""
+    if not estate.get("estate_id"):
+        print("      CRM-адмінка: у презентації нема ID об'єкта — визначаю за заголовком")
+        return None
+    if not os.path.exists(ADM.COOKIE_FILE):
+        print("      CRM-адмінка: cookie нема (🍪 Cookies → CRM) — визначаю за заголовком")
+        return None
+    try:
+        a = ADM.fetch_estate_admin_data(estate["estate_id"])
+    except Exception as e:  # noqa: BLE001 — не блокуємо постинг
+        print(f"      CRM-адмінка не відповіла ({type(e).__name__}: {str(e)[:150]}) — визначаю за заголовком. "
+              f"Якщо cookie протух — оновіть: 🍪 Cookies → CRM")
+        return None
+    print(f"      CRM-адмінка: категорія «{a.get('category') or '?'}», тип «{a.get('type') or '?'}», "
+          f"угода «{a.get('deal') or '?'}»")
+    return a
+
+
+def choose_category(estate, admin=None):
+    d = M.detect(estate, admin)
+    if d["unsupported"]:
+        raise OlxError(f"«{d['deal']} / {d['kind']}»: {d['unsupported']} на OLX поки не підключено")
+    oper = d["oper"]
+    if not oper:
+        oper = ask_option(f"OLX: не зрозумів тип угоди («{d['deal'] or 'порожньо'}»). Що це?",
+                          [(M.SALE, "Продаж"), (M.RENT, "Довгострокова оренда")])
+        if not oper:
+            raise OlxError("не обрано тип угоди")
+    cid = M.resolve_category(d, oper, estate)
     if cid is None:
-        kind = M.deal_kind(estate.get("deal_title"))[1]
-        cid = ask_option(f"OLX: не знаю, куди викласти «{kind}». Оберіть категорію OLX", M.category_choices(oper))
+        cid = ask_option(f"OLX: не знаю, куди викласти «{d['kind'] or 'тип не вказано'}». Оберіть категорію OLX",
+                         M.category_choices(oper, d["family"], d["category"]))
         if not cid:
             raise OlxError("не обрано категорію OLX")
     return cid
@@ -455,7 +484,9 @@ def cmd_post(a):
         estate = fetch_estate_data(a.url)
         report["crm"] = {k: estate.get(k) for k in ("article", "deal_title", "address", "price", "parameters")}
         print(f"      {estate.get('article')} · {estate.get('deal_title')} · {estate.get('address')} · {estate.get('price')}")
-        cid = choose_category(estate)
+        admin = crm_admin(estate)
+        report["crm_admin"] = {k: (admin or {}).get(k) for k in ("category", "type", "deal")}
+        cid = choose_category(estate, admin)
         report["category_id"] = cid
         print(f"      Категорія OLX: {M.cat_label(cid)} ({cid})")
 

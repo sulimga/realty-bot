@@ -242,9 +242,12 @@ def deal_kind(deal_title):
     return (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else "")
 
 
+DAILY_RX = r"подоб|посуточ|погодин|почасов"
+
+
 def deal_oper(deal):
     d = (deal or "").lower()
-    if re.search(r"подоб|посуточ|погодин|почасов", d):
+    if re.search(DAILY_RX, d):
         return None
     if "прод" in d:
         return SALE
@@ -262,32 +265,67 @@ def commercial_category(text, oper):
     return None
 
 
-def detect(estate):
+def detect(estate, admin=None):
     """
-    -> (oper, family, category_id | None, пояснення).
-    family None + пояснення — OLX-програма такого не вміє. category_id None при family=commercial —
-    тип не впізнали, треба спитати.
+    Що це за оголошення. Джерела: авторизована сторінка CRM (admin: category/type/deal — рієлтори
+    їх не правлять, найнадійніше) -> заголовок CRM («Продаж / Квартира»).
+    -> {"oper": sale|rent|None, "family": house|flat|commercial|None, "deal", "kind", "category",
+        "unsupported": None | що саме не вміємо}
+    oper None — тип угоди не зрозуміли (треба спитати); family None — тип не впізнали (треба спитати).
     """
     deal, kind = deal_kind(estate.get("deal_title"))
-    oper = deal_oper(deal)
-    if not oper:
-        return None, None, None, f"угода «{deal or '?'}» — вмію лише продаж і довгострокову оренду"
+    category = ""
+    if admin:
+        a_deal = (admin.get("deal") or "").strip().lower()
+        if deal_oper(a_deal) or re.search(DAILY_RX, a_deal):
+            deal = a_deal
+        if (admin.get("type") or "").strip():
+            kind = admin["type"].strip().lower()
+        category = (admin.get("category") or "").strip().lower()
+    res = {"oper": deal_oper(deal), "family": None, "deal": deal, "kind": kind, "category": category,
+           "unsupported": None}
+
+    if re.search(DAILY_RX, deal):
+        res["unsupported"] = "подобова/погодинна оренда"
+        return res
+    if "земел" in category:
+        res["unsupported"] = "земля"
+        return res
     for rx, what in NOT_SUPPORTED:
         if re.search(rx, kind):
-            return oper, None, None, f"{what} на OLX поки не підключено"
+            res["unsupported"] = what
+            return res
     if re.search(FLAT_RX, kind):
-        return oper, FLAT, FAMILY_CATS[FLAT][oper], ""
-    if kind in HOUSE_KINDS or re.search(HOUSE_RX, kind):
-        return oper, HOUSE, FAMILY_CATS[HOUSE][oper], ""
-    p = estate.get("parameters") or {}
-    extra = get(p, "Тип об'єкта", "Тип объекта", "Тип приміщення", "Тип помещения", "Призначення", "Назначение") or ""
-    cid = commercial_category(kind, oper) or commercial_category(extra, oper)
-    return oper, COMMERCIAL, cid, ""
+        res["family"] = FLAT
+    elif kind in HOUSE_KINDS or re.search(HOUSE_RX, kind):
+        res["family"] = HOUSE
+    elif "комерц" in category or "коммерч" in category or commercial_category(kind, SALE) \
+            or commercial_category(kind, RENT):
+        res["family"] = COMMERCIAL
+    return res
 
 
-def category_choices(oper):
-    """Усі категорії, які можна обрати вручну для цієї угоди: [(id, назва)]."""
-    ids = [FAMILY_CATS[FLAT][oper], FAMILY_CATS[HOUSE][oper]] + COMMERCIAL_CATS[oper]
+def resolve_category(d, oper, estate):
+    """Категорія OLX за результатом detect і типом угоди; None — треба спитати."""
+    if d["family"] in FAMILY_CATS:
+        return FAMILY_CATS[d["family"]][oper]
+    if d["family"] == COMMERCIAL:
+        p = estate.get("parameters") or {}
+        extra = get(p, "Тип об'єкта", "Тип объекта", "Тип приміщення", "Тип помещения", "Призначення",
+                    "Назначение") or ""
+        return commercial_category(d["kind"], oper) or commercial_category(extra, oper)
+    return None
+
+
+def category_choices(oper, family=None, category=""):
+    """Категорії для ручного вибору: [(id, назва)]. Якщо відомо, що це комерція чи житло, — лише вони."""
+    living = [FAMILY_CATS[FLAT][oper], FAMILY_CATS[HOUSE][oper]]
+    if family == COMMERCIAL or "комерц" in category or "коммерч" in category:
+        ids = COMMERCIAL_CATS[oper]
+    elif family in FAMILY_CATS or "житл" in category or "жил" in category:
+        ids = living
+    else:
+        ids = living + COMMERCIAL_CATS[oper]
     return [(cid, cat_label(cid)) for cid in ids]
 
 
