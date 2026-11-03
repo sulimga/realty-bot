@@ -10,12 +10,14 @@
 """
 
 import base64
+import hashlib
 import json
 import os
 import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -273,32 +275,41 @@ class OlxClient:
         os.chmod(tmp, 0o600)
         os.replace(tmp, self.refresh_path)        # атомарно: або старий, або новий, ніколи не обрізаний
 
-    def refresh_oauth(self):
-        """Новий access token за refresh token. True/False; причина невдачі — у self.refresh_error."""
-        if not self.has_refresh():
-            self.refresh_error = "refresh token не задано"
-            return False
+    def authorize_url(self, verifier, state, scope=None):
+        """Посилання на звичайну сторінку входу OLX (OAuth code + PKCE). Після входу браузер
+        відкриває OAUTH_REDIRECT?code=…&state=…; код без нашого verifier нікому не придатний."""
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        q = {"client_id": OAUTH_CLIENT_ID, "response_type": "code", "redirect_uri": OAUTH_REDIRECT,
+             "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
+        if scope:
+            q["scope"] = scope
+        return LOGIN + "/oauth2/authorize?" + urlencode(q)
+
+    def _token_call(self, step, form):
+        """POST /oauth2/token під файловим замком; новий refresh token зберігаємо одразу.
+        -> True/False; причина невдачі — у self.refresh_error."""
         import fcntl
+        os.makedirs(os.path.dirname(self.refresh_path) or ".", exist_ok=True)
         with open(self.refresh_path + ".lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
-                rt = self._read_refresh()                 # перечитуємо під замком: інший процес міг оновити
+                if form.get("grant_type") == "refresh_token":
+                    form["refresh_token"] = self._read_refresh()   # перечитуємо під замком
+                old_rt = form.get("refresh_token")
                 try:
-                    r = self.s.post(LOGIN + "/oauth2/token", timeout=40,
+                    r = self.s.post(LOGIN + "/oauth2/token", timeout=40, data=form,
                                     headers={**_ua(), "Accept": "*/*", "Origin": WWW, "Referer": WWW + "/",
-                                             "Content-Type": "application/x-www-form-urlencoded"},
-                                    data={"client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT,
-                                          "grant_type": "refresh_token", "refresh_token": rt})
+                                             "Content-Type": "application/x-www-form-urlencoded"})
                 except NET_ERRORS as e:
                     self.refresh_error = f"мережа: {type(e).__name__}"
                     return False
                 body = self._body(r)
                 d = body if isinstance(body, dict) else {}
                 new_rt, access = d.get("refresh_token"), d.get("access_token")
-                if new_rt and new_rt != rt:
+                if new_rt and new_rt != old_rt:
                     self._write_refresh(new_rt)           # першим ділом: старий уже недійсний
-                self._log("refresh_oauth", "POST", LOGIN + "/oauth2/token", r.status_code,
-                          resp={"keys": sorted(d), "rotated": bool(new_rt and new_rt != rt),
+                self._log(step, "POST", LOGIN + "/oauth2/token", r.status_code,
+                          resp={"keys": sorted(d), "rotated": bool(new_rt and new_rt != old_rt),
                                 "expires_in": d.get("expires_in"),
                                 "error": None if access else (d.get("error") or str(body)[:200])})
                 if not access:
@@ -306,12 +317,30 @@ class OlxClient:
                     self.refresh_error = f"HTTP {r.status_code}{' ' + err if err else ''}" + \
                         (" — вхід скасовано або протух" if err == "invalid_grant" else "")
                     return False
+                if form.get("grant_type") == "authorization_code" and not new_rt:
+                    self.refresh_error = "OLX видав вхід без refresh token — постійний вхід так не налаштувати"
+                    self._save_token(access)
+                    return False
                 self._save_token(access)
                 self.token_source = "оновлений (постійний вхід)"
                 self.refresh_error = None
                 return True
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def exchange_code(self, code, verifier):
+        """Код зі сторінки входу -> постійний вхід (refresh token у файл)."""
+        return self._token_call("login_code", {"grant_type": "authorization_code", "client_id": OAUTH_CLIENT_ID,
+                                               "code": code, "redirect_uri": OAUTH_REDIRECT,
+                                               "code_verifier": verifier})
+
+    def refresh_oauth(self):
+        """Новий access token за refresh token. True/False; причина невдачі — у self.refresh_error."""
+        if not self.has_refresh():
+            self.refresh_error = "refresh token не задано"
+            return False
+        return self._token_call("refresh_oauth", {"client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT,
+                                                  "grant_type": "refresh_token"})
 
     def try_refresh(self):
         if self.has_refresh():

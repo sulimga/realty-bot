@@ -106,9 +106,10 @@ def install_print_hook():
     builtins.print = _protocol_print
 
 
-def ask_choice(text, options=None, allow_text=False):
+def ask_choice(text, options=None, allow_text=False, secret=False):
     """
     Поставити питання. options — [(value, label), ...] або None (тільки вільна відповідь).
+    secret=True — відповідь містить щось чутливе: бот видалить повідомлення з нею з чату.
     Повертає ("opt", value) | ("text", рядок) | (None, None) — пропущено.
     value може бути будь-яким об'єктом: назовні передається лише номер варіанта.
     """
@@ -137,7 +138,7 @@ def ask_choice(text, options=None, allow_text=False):
     full = (context + "\n\n" + text).strip() if context else text
     _emit({"type": "ask", "id": _ask_counter, "text": full,
            "options": [str(label) for _, label in options] or None,
-           "allow_text": allow_text})
+           "allow_text": allow_text, **({"secret": True} if secret else {})})
     line = sys.stdin.readline()
     if not line:
         return None, None
@@ -152,9 +153,9 @@ def ask_choice(text, options=None, allow_text=False):
     return None, None
 
 
-def ask_text(text):
+def ask_text(text, secret=False):
     """Вільна відповідь. Повертає рядок або None (пропущено)."""
-    kind, val = ask_choice(text, None, True)
+    kind, val = ask_choice(text, None, True, secret=secret)
     return val if kind == "text" else None
 
 

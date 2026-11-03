@@ -21,7 +21,7 @@ deploy/               cloud-init.yaml, install.sh, update.sh, realty-bot.service
                       add-instance.sh / remove-instance.sh (слоти для інших людей, розділ 3)
 ```
 **Протокол** (stdout/stdin, JSON по рядку):
-`{"type":"info","text"}` · `{"type":"ask","id","text","options":[…]|null,"allow_text"}` ·
+`{"type":"info","text"}` · `{"type":"ask","id","text","options":[…]|null,"allow_text","secret"?}` ·
 `{"type":"result","ok","text","url","id","draft", …додаткові поля}`; відповідь на ask:
 `{"id","choice":i}` / `{"id","text"}` / `{"id"}` (пропуск). У програмах: `bp.info`, `bp.ask_choice`,
 `bp.ask_text`, `bp.result`. print() автоматично стає info. З консолі (tty) питання йдуть через input().
@@ -194,6 +194,16 @@ URL-патерн і інший cookie, ніж публічна презента�
   (`boards.json` → `keepalive_h`) запускає `run.py keepalive` у фоні й пише лише коли зламалось / знову працює.
   /status: «постійний вхід ✓». Скільки живе refresh token — невідомо (з'ясуємо на практиці).
   Разовий варіант — як раніше: рядок Authorization (Bearer …), діє 15 хв.
+  **Вхід за посиланням (для клієнтів, ЕКСПЕРИМЕНТ 03.11.2026, ще не перевірено на живому OLX):**
+  «🍪 Cookies → OLX → 🔗 Увійти за посиланням» → `run.py login`: OAuth code + PKCE —
+  `login.olx.ua/oauth2/authorize?client_id=…&response_type=code&redirect_uri=https://www.olx.ua/d/uk/callback/&state&code_challenge(S256)`
+  (спершу scope «openid profile email offline_access», якщо користувач пише «помилка» — без scope) → людина
+  входить на сайті OLX (пароль бачить лише OLX) → надсилає адресу …/callback/?code=…&state=… (бот видаляє
+  повідомлення: ask з `secret`) → обмін `grant_type=authorization_code` + code_verifier → refresh token у
+  `olx_refresh.txt`. Невідомо: чи лишається code в адресі (сторінка callback сайту може перекинути далі — тоді
+  з історії браузера) і чи OLX прийме PKCE/scope. Ручний варіант — «🔑 Вставити токен / cookie вручну».
+  Протокол: `bp.ask_text(…, secret=True)` → у питанні `"secret": true`, бот видаляє повідомлення-відповідь.
+  boards.json: `login_cmd` (кнопка входу за посиланням), `keepalive_h` (фонове оновлення входу).
 - **CloudFront** блокує звичайні Python-запити (403) — використовується `curl_cffi` з імітацією Chrome.
 - Ендпоінти: `GET www.olx.ua/api/v1/users/me/`; гео (публічні) `/api/v1/geo-encoder/location-autocomplete/?query=…&limit=10&scope=posting`
   (з Accept-Language: uk — назви українською; для Києва — записи з district) і `/api/v1/geo-encoder/cities/{id}/`;

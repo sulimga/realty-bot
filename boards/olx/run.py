@@ -3,6 +3,7 @@ OLX — точка входу для диспетчера (протокол: com
 
     python run.py post --url <посилання CRM> [--dry-run]
     python run.py check
+    python run.py login          # постійний вхід за посиланням (OAuth code + PKCE), без консолі й інкогніто
     python run.py keepalive      # оновити постійний вхід (бот викликає за розкладом, boards.json keepalive_h)
 
 Вміє: будинки, квартири (продаж і довгострокова оренда), комерцію всіх типів (продаж і оренда).
@@ -20,6 +21,8 @@ import argparse
 import io
 import json
 import os
+import re
+import secrets
 import sys
 import time
 import traceback
@@ -590,6 +593,53 @@ def cmd_post(a):
             pass
 
 
+# Спершу — як просить сам сайт (auth0-spa-js додає offline_access); якщо OLX покаже помилку — без scope.
+LOGIN_SCOPES = ["openid profile email offline_access", None]
+
+
+def cmd_login(a):
+    """Постійний вхід за посиланням: користувач входить на звичайній сторінці OLX (пароль бачить лише OLX),
+    надсилає адресу, яка відкрилась після входу (…/callback/?code=…), — міняємо код на refresh token."""
+    cfg = load_cfg()
+    client = make_client(cfg, check_token=False)
+    for attempt, scope in enumerate(LOGIN_SCOPES, 1):
+        verifier, state = secrets.token_urlsafe(64), secrets.token_urlsafe(16)
+        url = client.authorize_url(verifier, state, scope)
+        ans = bp.ask_text(
+            "🔗 Вхід в OLX для бота" + (f" (спроба {attempt})" if attempt > 1 else "") + ":\n\n"
+            f"1) Відкрийте посилання і увійдіть в OLX — логін і пароль вводите на самому сайті OLX, бот їх не бачить:\n"
+            f"{url}\n\n"
+            "2) Після входу відкриється сторінка OLX (може бути порожня або з помилкою — це нормально). "
+            "Скопіюйте ПОВНУ адресу з рядка браузера — вона починається з https://www.olx.ua/d/uk/callback/?code=\n"
+            "Якщо адреса вже змінилась — знайдіть її в історії браузера (на комп'ютері Ctrl+H, на телефоні — «Історія»).\n\n"
+            "3) Надішліть адресу сюди (повідомлення я одразу видалю). Посилання діє кілька хвилин.\n"
+            "Якщо замість входу OLX показав помилку — напишіть «помилка».", secret=True)
+        if not ans:
+            raise OlxError("вхід скасовано")
+        err = re.search(r"[?&#]error=([^&\s#]+)", ans)
+        code = re.search(r"[?&#]code=([^&\s#]+)", ans)
+        if not code:
+            if attempt < len(LOGIN_SCOPES):
+                print(f"Без коду{' (' + err.group(1) + ')' if err else ''} — пробую інший варіант посилання")
+                continue
+            raise OlxError("в адресі нема коду входу (code=…). Перешліть, будь ласка, Claude текст помилки OLX — "
+                           "налаштуємо. А поки — ручний варіант: 🍪 Cookies → OLX → «Вставити токен вручну»")
+        got_state = re.search(r"[?&#]state=([^&\s#]+)", ans)
+        if got_state and got_state.group(1) != state:
+            raise OlxError("це адреса від іншого посилання входу — натисніть «Увійти за посиланням» ще раз")
+        print("Отримав код, налаштовую вхід…")
+        if not client.exchange_code(code.group(1), verifier):
+            raise OlxError(f"OLX не видав вхід: {client.refresh_error}. Спробуйте ще раз (посилання одноразове)")
+        try:
+            me = client.me()
+            who = me.get("email") or me.get("name") or me.get("id") or "?"
+        except OlxError:
+            who = "?"
+        bp.result(True, f"OLX: постійний вхід налаштовано ✅ ({who}). Далі бот оновлює його сам.")
+        return
+    raise OlxError("не вдалося увійти")
+
+
 def cmd_keepalive(a):
     """Оновлює постійний вхід (і заразом не дає йому «заснути»). Без refresh token — нічого не робить."""
     cfg = load_cfg()
@@ -660,9 +710,10 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("check")
     sub.add_parser("keepalive")
+    sub.add_parser("login")
     a = ap.parse_args()
     try:
-        {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive}[a.cmd](a)
+        {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive, "login": cmd_login}[a.cmd](a)
     except BaseException as e:  # noqa: BLE001
         finish_error(e)
     finally:

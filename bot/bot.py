@@ -151,7 +151,7 @@ async def ask_user(ctx, chat_id, msg):
     hint = "\n\n<i>Або напишіть відповідь повідомленням.</i>" if msg.get("allow_text") else ""
     sent = await ctx.bot.send_message(chat_id, f"❓ {esc(cut(msg.get('text'), 3000))}{hint}",
                                       parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
-    ctx.application.bot_data["pending_ask"] = {"future": fut, "options": options,
+    ctx.application.bot_data["pending_ask"] = {"future": fut, "options": options, "secret": msg.get("secret"),
                                                "allow_text": msg.get("allow_text"), "message": sent}
     try:
         return await fut
@@ -606,6 +606,10 @@ async def start_cookies(update, ctx):
     await update.message.reply_text("Для якого сайту оновити cookie?", reply_markup=kb)
 
 
+def key_has_login(key):
+    return bool((D.boards().get(key) or {}).get("login_cmd"))
+
+
 async def save_cookie(update, ctx, board_key, text):
     os.makedirs(SECRETS, exist_ok=True)
     os.chmod(SECRETS, 0o700)
@@ -898,6 +902,11 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if pa and not pa["future"].done():
         if pa.get("allow_text"):
             pa["future"].set_result({"text": text})
+            if pa.get("secret"):                   # напр. адреса з кодом входу — не тримаємо в чаті
+                try:
+                    await update.message.delete()
+                except BadRequest:
+                    pass
             return
         return await update.message.reply_text("Оберіть варіант кнопкою вище або «Пропустити».")
 
@@ -1132,8 +1141,26 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         return await db_go(chat_id, ctx, s["db_name"])
 
-    if data.startswith("ck:"):
+    if data.startswith("lg:"):                  # вхід за посиланням (boards.json → login_cmd)
         key = data[3:]
+        reset(ctx)
+        await q.edit_message_reply_markup(None)
+        b = D.boards().get(key) or {}
+        if not b.get("login_cmd"):
+            return
+        if ctx.application.bot_data.get("busy"):
+            return await ctx.bot.send_message(chat_id, "Зачекайте, іде інша дія.")
+        return await run_board(ctx, chat_id, key, b["login_cmd"])
+
+    if data.startswith("ck:") and key_has_login(data[3:]):
+        key = data[3:]
+        await q.edit_message_reply_markup(None)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Увійти за посиланням (просто)", callback_data=f"lg:{key}")],
+                                   [InlineKeyboardButton("🔑 Вставити токен / cookie вручну", callback_data=f"ckm:{key}")]])
+        return await ctx.bot.send_message(chat_id, f"{D.boards()[key]['title']}: як дати боту вхід?", reply_markup=kb)
+
+    if data.startswith("ck:") or data.startswith("ckm:"):
+        key = data.split(":", 1)[1]
         s["mode"] = f"await_cookie:{key}"
         await q.edit_message_reply_markup(None)
         if key == CRM_ADMIN_KEY:
