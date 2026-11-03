@@ -4,7 +4,8 @@ OLX — точка входу для диспетчера (протокол: com
     python run.py post --url <посилання CRM> [--dry-run]
     python run.py check
 
-Поки вміє лише «Продаж будинків» (категорія 1602).
+Вміє: будинки, квартири (продаж і довгострокова оренда), комерцію всіх типів (продаж і оренда).
+Категорії й обов'язкові поля — з categories.json (див. mapping.py).
 Оголошення створюється одразу (як після кнопки «Опублікувати» у формі) і чекає на
 оплату/активацію в кабінеті OLX — у категорії нерухомості розміщення платне.
 --dry-run: усе зібрати й показати, нічого не відправляти на OLX (фото теж не вантажаться).
@@ -105,11 +106,119 @@ def ask_option(text, options, default=None):
 
 
 # ------------------------------------------------------------------ параметри
-def build_params(estate, cfg, notes):
-    p = estate.get("parameters") or {}
-    qf = estate.get("quick_facts") or {}
-    out = {"from_developer": False, "commission": False, "is_exchange": False,
-           "cooperate": False, "eoselia": False}
+def set_int(out, code, label, raw, notes, unit_note=""):
+    """Ціле число в out[code]: з CRM (raw), а якщо там нема — питаємо."""
+    n = M.num(raw)
+    if n is None:
+        v = ask_number(label, unit_note)
+        if not v:
+            raise OlxError(f"обов'язкове поле «{label}» не заповнене")
+        out[code] = v
+        return
+    v = M.to_int_str(n)
+    if float(v) != n:
+        notes.append(f"{label}: {raw} → {v} (OLX приймає лише цілі ≥ 1)")
+    out[code] = v
+
+
+def total_area_raw(estate):
+    p, qf = estate.get("parameters") or {}, estate.get("quick_facts") or {}
+    return M.get(p, "Площа загальна,м²", "Площадь общая,м²") or (str(qf.get("Площа") or "").split("/")[0] or None)
+
+
+def walls_and_repair(estate, out):
+    walls, raw = M.walls_code(estate)
+    if walls is None:
+        walls = ask_option(f"OLX: тип стін у CRM «{raw}» — що поставити?",
+                           list(M.WALLS_LABELS.items()), M.WALLS_DEFAULT)
+    out["house_type"] = walls
+    rep, raw = M.repair_code(estate)
+    if raw and rep is None:
+        rep = ask_option(f"OLX: ремонт у CRM «{raw}» — що поставити? (або пропустити)",
+                         list(M.REPAIR_LABELS.items()))
+    if rep:
+        out["repair"] = rep
+
+
+def house_params(estate, out, notes):
+    p, qf = estate.get("parameters") or {}, estate.get("quick_facts") or {}
+    floors_qf = qf.get("Поверх") if "/" not in str(qf.get("Поверх", "")) else None
+    set_int(out, "total_floors", "Поверховість", M.get(p, "Поверховість", "Этажность") or floors_qf, notes)
+    set_int(out, "total_area", "Загальна площа", total_area_raw(estate), notes, ", м²")
+    set_int(out, "number_of_rooms", "Кількість кімнат",
+            M.get(p, "Кіл. кімнат", "Кол. комнат") or qf.get("Кіл. кімнат"), notes)
+    set_int(out, "land_area", "Площа ділянки",
+            M.get(p, "Площа ділянки,соток", "Площадь участка,соток") or qf.get("Ділянка"), notes, ", соток")
+    out["property_type_houses"] = M.house_kind(estate)
+    walls_and_repair(estate, out)
+
+
+def flat_params(estate, cid, out, notes):
+    p, qf = estate.get("parameters") or {}, estate.get("quick_facts") or {}
+    desc = estate.get("description") or ""
+    set_int(out, "total_area", "Загальна площа", total_area_raw(estate), notes, ", м²")
+
+    floor, floors = M.split_pair(M.get(p, "Поверх", "Этаж") or qf.get("Поверх"))
+    f2 = M.get(p, "Поверховість", "Этажность")
+    if f2:
+        floors = M.split_pair(f2)[0] or floors
+    if not floor or not floors:
+        t_floor, t_floors = M.find_floor_in_text(desc)
+        floor, floors = floor or t_floor, floors or t_floors
+    set_int(out, "floor", "Поверх", floor, notes)
+    set_int(out, "total_floors", "Поверховість будинку", floors, notes)
+
+    kitchen = M.num(M.get(p, "Площа кухні,м²", "Площадь кухни,м²"))
+    if kitchen:
+        set_int(out, "kitchen_area", "Площа кухні", kitchen, notes)
+    else:
+        sug = M.to_int_str(float(out["total_area"]) * 0.2)
+        while "kitchen_area" not in out:
+            kind, val = bp.ask_choice(f"OLX: площа кухні обов'язкова, а в CRM її нема. Взяти ≈20% від загальної "
+                                      f"({sug} м²) чи напишіть свою", [(sug, f"{sug} м² (20%)")], allow_text=True)
+            if kind is None:
+                raise OlxError("обов'язкове поле «Площа кухні» не заповнене")
+            if M.num(val):
+                out["kitchen_area"] = M.to_int_str(M.num(val))
+            else:
+                print(f"   «{val}» — не число")
+
+    rooms = M.get(p, "Кіл. кімнат", "Кол. комнат") or qf.get("Кіл. кімнат")
+    rooms = int(M.num(rooms)) if M.num(rooms) else M.find_rooms_in_text(f"{estate.get('deal_title')}\n{desc}")
+    if rooms:
+        out["number_of_rooms_string"] = M.rooms_key(rooms)
+    if M.has_param(cid, "apartments_object_type"):
+        out["apartments_object_type"] = "secondary_market"      # правило: завжди вторинне
+    walls_and_repair(estate, out)
+
+
+def commercial_params(estate, out, notes):
+    set_int(out, "total_area", "Загальна площа", total_area_raw(estate), notes, ", м²")
+    rep, _ = M.repair_code(estate)
+    if rep:
+        out["is_repaired"] = M.IS_REPAIRED[rep]
+
+
+def ensure_required(cid, out):
+    """Страховка: кожне обов'язкове поле категорії має бути заповнене — інакше питаємо."""
+    for pd in M.required_params(cid):
+        code = pd["code"]
+        if code in out or pd["type"] == "price":
+            continue
+        if pd["type"] == "number":
+            v = ask_number(pd["label"])
+        elif pd.get("values"):
+            v = ask_option(f"OLX: оберіть «{pd['label']}»", M.param_values(cid, code))
+            v = [v] if v and pd["type"] == "multichoice" else v
+        else:
+            v = bp.ask_text(f"OLX: вкажіть «{pd['label']}»")
+        if not v:
+            raise OlxError(f"обов'язкове поле «{pd['label']}» не заповнене")
+        out[code] = v
+
+
+def build_params(estate, cfg, cid, notes):
+    out = {f: False for f in M.FLAGS if M.has_param(cid, f)}
 
     price, cur = M.parse_price(estate.get("price"))
     if not price:
@@ -120,41 +229,40 @@ def build_params(estate, cfg, notes):
         cur = ask_option(f"OLX: валюта ціни {price}?", [("USD", "$"), ("UAH", "грн"), ("EUR", "€")], "USD")
     out["price"] = {"currency": cur, "price": price, "arranged": 1 if cfg.get("price_negotiable") else 0}
 
-    def required(code, label, raw, unit_note=""):
-        n = M.num(raw)
-        if n is None:
-            v = ask_number(label, unit_note)
-            if not v:
-                raise OlxError(f"обов'язкове поле «{label}» не заповнене")
-            out[code] = v
-            return
-        v = M.to_int_str(n)
-        if float(v) != n:
-            notes.append(f"{label}: {raw} → {v} (OLX приймає лише цілі)")
-        out[code] = v
-
-    floors_qf = qf.get("Поверх") if "/" not in str(qf.get("Поверх", "")) else None
-    required("total_floors", "Поверховість", M.get(p, "Поверховість", "Этажность") or floors_qf)
-    area_qf = str(qf.get("Площа") or "").split("/")[0] or None
-    required("total_area", "Загальна площа", M.get(p, "Площа загальна,м²", "Площадь общая,м²") or area_qf, ", м²")
-    required("number_of_rooms", "Кількість кімнат", M.get(p, "Кіл. кімнат", "Кол. комнат") or qf.get("Кіл. кімнат"))
-    required("land_area", "Площа ділянки", M.get(p, "Площа ділянки,соток", "Площадь участка,соток") or qf.get("Ділянка"),
-             ", соток")
-    out["property_type_houses"] = M.house_kind(estate)
-
-    walls, raw = M.walls_code(estate)
-    if walls is None:
-        walls = ask_option(f"OLX: тип стін у CRM «{raw}» — що поставити?",
-                           list(M.WALLS_LABELS.items()), M.WALLS_DEFAULT)
-    out["house_type"] = walls
-
-    rep, raw = M.repair_code(estate)
-    if raw and rep is None:
-        rep = ask_option(f"OLX: ремонт у CRM «{raw}» — що поставити? (або пропустити)",
-                         list(M.REPAIR_LABELS.items()))
-    if rep:
-        out["repair"] = rep
+    fam = M.family_of(cid)
+    if fam == M.HOUSE:
+        house_params(estate, out, notes)
+    elif fam == M.FLAT:
+        flat_params(estate, cid, out, notes)
+    else:
+        commercial_params(estate, out, notes)
+    ensure_required(cid, out)
     return out
+
+
+def describe_params(cid, params):
+    """Зведення полів людською мовою (назви й значення — з визначення категорії)."""
+    out = []
+    for code, v in params.items():
+        if code in M.FLAGS or code == "price":
+            continue
+        pd = M.param_def(cid, code)
+        if pd and pd.get("values"):
+            v = M.value_label(cid, code, v[0] if isinstance(v, list) else v)
+        out.append(f"{pd['label'] if pd else code}: {v}")
+    return out
+
+
+def choose_category(estate):
+    oper, fam, cid, why = M.detect(estate)
+    if fam is None:
+        raise OlxError(f"«{estate.get('deal_title')}»: {why}")
+    if cid is None:
+        kind = M.deal_kind(estate.get("deal_title"))[1]
+        cid = ask_option(f"OLX: не знаю, куди викласти «{kind}». Оберіть категорію OLX", M.category_choices(oper))
+        if not cid:
+            raise OlxError("не обрано категорію OLX")
+    return cid
 
 
 # ------------------------------------------------------------------ населений пункт
@@ -347,27 +455,30 @@ def cmd_post(a):
         estate = fetch_estate_data(a.url)
         report["crm"] = {k: estate.get(k) for k in ("article", "deal_title", "address", "price", "parameters")}
         print(f"      {estate.get('article')} · {estate.get('deal_title')} · {estate.get('address')} · {estate.get('price')}")
-        if not M.is_house_sale(estate):
-            raise OlxError(f"поки вмію лише продаж будинків, а тут «{estate.get('deal_title')}»")
+        cid = choose_category(estate)
+        report["category_id"] = cid
+        print(f"      Категорія OLX: {M.cat_label(cid)} ({cid})")
 
         notes = []
-        params = build_params(estate, cfg, notes)
+        params = build_params(estate, cfg, cid, notes)
         geo_client = client or OlxClient(None, cfg["device_id"])   # dry-run: гео-запити публічні
         print("[2/5] Населений пункт…")
         loc, place, city = resolve_location(geo_client, estate, cfg)
         print(f"      {place}")
 
-        cands = M.title_candidates(estate, params, city)
+        cands = M.title_candidates(estate, cid, params, {"city": city, "street": M.street(estate.get("address")),
+                                                         "complex": M.complex_name(estate)})
         # кнопки в боті обрізають текст, тому повні варіанти — в самому питанні
         listing = "\n".join(f"{i}. {t} ({len(t)})" for i, t in enumerate(cands, 1))
         kind, title = bp.ask_choice(f"OLX: заголовок ({M.TITLE_MIN}–{M.TITLE_MAX} символів). "
                                     f"Оберіть або напишіть свій\n{listing}",
                                     [(t, f"{i}. {t}") for i, t in enumerate(cands, 1)], allow_text=True)
         title = (title or cands[0]).strip()
-        while not (M.TITLE_MIN <= len(title) <= M.TITLE_MAX):
-            t = bp.ask_text(f"OLX: заголовок має бути {M.TITLE_MIN}–{M.TITLE_MAX} символів, зараз {len(title)}. Напишіть інший")
+        while not M.title_ok(title):
+            t = bp.ask_text(f"OLX: заголовок не підходить ({len(title)} символів). Треба {M.TITLE_MIN}–{M.TITLE_MAX} "
+                            f"символів, без смайликів, посилань, email і 4+ розділових знаків підряд. Напишіть інший")
             if not t:
-                raise OlxError("заголовок не підходить за довжиною")
+                raise OlxError("заголовок не підходить")
             title = t.strip()
 
         desc = M.description(estate)
@@ -380,12 +491,12 @@ def cmd_post(a):
         cont = contacts(client, cfg) if client else {k: cfg.get(k) or "?" for k in ("person", "phone", "email")}
 
         urls = estate.get("photos") or []
-        limit = M.MAX_PHOTOS[M.CATEGORY_HOUSE_SALE]
+        limit = M.max_photos(cid)
         if len(urls) > limit:
             notes.append(f"фото: у CRM {len(urls)}, OLX приймає максимум {limit} — беру перші {limit}")
             urls = urls[:limit]
 
-        payload = {"brand": "olxua", "lang": "uk", "category_id": M.CATEGORY_HOUSE_SALE,
+        payload = {"brand": "olxua", "lang": "uk", "category_id": cid,
                    **{k: loc[k] for k in ("city_id", "district_id") if k in loc},
                    "description": desc, "email": cont["email"], "parameters": params,
                    "person": cont["person"], "phone": cont["phone"], "images": [], "title": title,
@@ -393,12 +504,10 @@ def cmd_post(a):
                    "components_data": {"reposting": {"action": "ad_posted", "data": "{\"reposting\":false}"}},
                    **{k: loc[k] for k in ("latitude", "longitude", "radius", "zoom")}}
 
-        summary = [f"Заголовок: {title}", f"Ціна: {params['price']['price']} {params['price']['currency']}",
-                   f"Площа {params['total_area']} м², ділянка {params['land_area']} сот., "
-                   f"кімнат {params['number_of_rooms']}, поверхів {params['total_floors']}",
-                   f"Тип: {dict(M.HOUSE_KIND_LABELS)[params['property_type_houses']]}, "
-                   f"стіни: {M.WALLS_LABELS[params['house_type']]}"
-                   + (f", ремонт: {M.REPAIR_LABELS[params['repair']]}" if params.get("repair") else ""),
+        summary = [f"Категорія: {M.cat_label(cid)}", f"Заголовок: {title}",
+                   f"Ціна: {params['price']['price']} {params['price']['currency']}"
+                   + (" (договірна)" if params["price"].get("arranged") else ""),
+                   "; ".join(describe_params(cid, params)),
                    f"Місце: {place}", f"Фото: {len(urls)}"] + [f"⚠️ {n}" for n in notes]
         print("\n".join(summary))
         report["payload"] = payload
