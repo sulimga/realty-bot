@@ -185,8 +185,15 @@ URL-патерн і інший cookie, ніж публічна презента�
   Довгий refresh token лежить у localStorage браузера (`@@auth0spajs@@::…::offline_access`), оновлення —
   `POST https://login.olx.ua/oauth2/token` (form: grant_type=refresh_token, client_id, refresh_token);
   **refresh token ротується** при кожному оновленні (не можна ділити між браузером і ботом).
-  Зараз токен вставляю вручну перед публікацією (🍪 → OLX → значення authorization з запиту users/me).
-  Автооновлення — НЕ зроблено, рішення за мною (окремий вхід в інкогніто лише для бота).
+  **Постійний вхід (03.11.2026):** окремий вхід в OLX у вікні інкогніто лише для бота → скрипт у консолі
+  (є в підказці «🍪 Cookies → OLX») копіює refresh token з localStorage → вікно одразу закрити (НЕ «Вийти»)
+  → надіслати боту «refresh_token: eyJ…» → `secrets/olx_refresh.txt`. Оновлення: `POST login.olx.ua/oauth2/token`
+  (form: client_id=309lsgh0deirlo2la9kmrmhe3v, redirect_uri=https://www.olx.ua/d/uk/callback/,
+  grant_type=refresh_token, refresh_token) — новий refresh token зберігається одразу (атомарно, під файловим
+  замком `olx_refresh.txt.lock`). Програма OLX оновлює access token сама перед дією; бот раз на 12 год
+  (`boards.json` → `keepalive_h`) запускає `run.py keepalive` у фоні й пише лише коли зламалось / знову працює.
+  /status: «постійний вхід ✓». Скільки живе refresh token — невідомо (з'ясуємо на практиці).
+  Разовий варіант — як раніше: рядок Authorization (Bearer …), діє 15 хв.
 - **CloudFront** блокує звичайні Python-запити (403) — використовується `curl_cffi` з імітацією Chrome.
 - Ендпоінти: `GET www.olx.ua/api/v1/users/me/`; гео (публічні) `/api/v1/geo-encoder/location-autocomplete/?query=…&limit=10&scope=posting`
   (з Accept-Language: uk — назви українською; для Києва — записи з district) і `/api/v1/geo-encoder/cities/{id}/`;
@@ -256,7 +263,8 @@ URL-патерн і інший cookie, ніж публічна презента�
 - Живий журнал програм сайтів (≤2 с), «Зависла на: …» при таймауті, ліміт фото rieltor узгоджено з таймаутом (30.10.2026).
 
 ## 11. Плани (по порядку)
-0. Розклад: щоденне оновлення дат rieltor (раз на добу вистачає — ліміт ≈49); вирішити автооновлення токена OLX.
+0. Розклад: щоденне оновлення дат rieltor (раз на добу вистачає — ліміт ≈49). Автовхід OLX — зроблено 03.11.2026
+   (фоновий запуск за `keepalive_h` у боті можна використати й для розкладу rieltor).
 1. **Таблиця об'єктів**: артикул/ID CRM, ID на rieltor, dom.ria, OLX, поточна ціна, статус.
    Записувати ID після кожної публікації. Далі — моніторинг Telegram-чатів (бот у групі або читання
    від мого акаунта — вирішити), розпізнавання зміни ціни / «продано» / «знято» → підтвердження в боті

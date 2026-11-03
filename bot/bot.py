@@ -274,7 +274,8 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         paths = [os.path.join(SECRETS, f"{key}_{n}.txt") for n in ("cookies", "auth")]
         mt = [os.path.getmtime(p) for p in paths if os.path.exists(p)]
         when = time.strftime("%d.%m %H:%M", time.localtime(max(mt))) if mt else "—"
-        lines.append(f"  {b['title']}: {'оновлено ' + when if when != '—' else 'немає'}")
+        auto = " · постійний вхід ✓" if os.path.exists(os.path.join(SECRETS, f"{key}_refresh.txt")) else ""
+        lines.append(f"  {b['title']}: {'оновлено ' + when if when != '—' else 'немає'}{auto}")
     crm_admin_p = os.path.join(SECRETS, "crm_admin_cookie.txt")
     when = time.strftime("%d.%m %H:%M", time.localtime(os.path.getmtime(crm_admin_p))) \
         if os.path.exists(crm_admin_p) else "—"
@@ -283,7 +284,7 @@ async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if batch:
         mins = int(time.time() - batch["started"]) // 60
         lines += ["", f"📦 Іде пакет rieltor: {batch['i']}/{batch['n']}, успішно {batch['ok']} ({mins} хв)"]
-    j = D.last_journal(8)
+    j = [e for e in D.last_journal(30) if (e.get("argv") or [""])[0] != "keepalive"][-8:]   # фонове — не показуємо
     if j:
         lines += ["", "Останні дії:"]
         for e in reversed(j):
@@ -624,6 +625,32 @@ async def save_cookie(update, ctx, board_key, text):
         reset(ctx)
         return await ctx.bot.send_message(update.effective_chat.id,
             "🍪 Збережено cookie CRM-адмінки. Перевірю на наступному постингу землі на rieltor.ua.")
+
+    # Постійний вхід: «refresh_token: eyJ…» (OLX — інструкція в cookie_hint) -> <сайт>_refresh.txt
+    refresh = re.search(r"refresh[_ ]?token\W{0,5}(eyJ[\w.-]{200,})", raw, re.I)
+    if refresh:
+        p = os.path.join(SECRETS, f"{board_key}_refresh.txt")
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(refresh.group(1))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
+        try:
+            await update.message.delete()
+        except BadRequest:
+            pass
+        reset(ctx)
+        await ctx.bot.send_message(update.effective_chat.id, "🔑 Збережено постійний вхід (refresh token), перевіряю…")
+        return await run_board(ctx, update.effective_chat.id, board_key, ["check"])
+    if re.search(r"refresh[_ ]?token", raw, re.I):
+        try:
+            await update.message.delete()
+        except BadRequest:
+            pass
+        reset(ctx)
+        return await ctx.bot.send_message(update.effective_chat.id,
+            "Схоже на refresh token, але самого токена (eyJ…) в повідомленні нема — нічого не зберіг. "
+            "Можливо, скрипт не знайшов його: переконайтесь, що ви увійшли в OLX у цьому вікні.")
 
     # Рядок «Authorization: Bearer <JWT>» (OLX) зберігаємо окремо, щоб не затерти cookie і навпаки
     jwt = re.search(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+", raw)
@@ -1128,12 +1155,54 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+# ------------------------------------------------------------------ фонове підтримання входу
+# Для сайтів з "keepalive_h" у boards.json бот раз на стільки годин запускає `<програма> keepalive`
+# (без повідомлень у чат). Пише власнику лише коли зламалось і коли знову запрацювало.
+KEEPALIVE_TICK = 600          # с — як часто перевіряти, чи не пора
+
+
+async def keepalive_loop(app):
+    async def _noop(*a, **k):
+        return {}
+
+    last, broken = {}, set()
+    await asyncio.sleep(60)
+    while True:
+        for key, b in D.boards().items():
+            hours = b.get("keepalive_h")
+            if not hours or time.time() - last.get(key, 0) < float(hours) * 3600:
+                continue
+            last[key] = time.time()
+            try:
+                res = await D.run(key, ["keepalive"], _noop, _noop)
+            except Exception as e:  # noqa: BLE001
+                res = {"ok": False, "text": f"{b['title']}: помилка диспетчера {e}"}
+            log.info("keepalive %s: %s", key, res.get("text"))
+            msg = None
+            if res.get("ok") and key in broken:
+                broken.discard(key)
+                msg = f"✅ {res.get('text')}"
+            elif not res.get("ok") and key not in broken:
+                broken.add(key)
+                msg = f"⚠️ {res.get('text')}"
+            if msg and owner_id():
+                try:
+                    await app.bot.send_message(owner_id(), msg)
+                except Exception:  # noqa: BLE001
+                    log.exception("keepalive: не вдалось написати власнику")
+        await asyncio.sleep(KEEPALIVE_TICK)
+
+
+async def post_init(app):
+    app.bot_data["keepalive_task"] = asyncio.create_task(keepalive_loop(app))
+
+
 def main():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     if not token:
         sys.exit("Немає TELEGRAM_TOKEN (див. /etc/realty-bot.env)")
     os.makedirs(os.path.join(DATA, "tmp"), exist_ok=True)
-    app = Application.builder().token(token).concurrent_updates(True).build()
+    app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("cancel", cmd_cancel))

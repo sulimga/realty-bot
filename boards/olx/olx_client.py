@@ -39,6 +39,12 @@ def new_session(engine="auto"):
 
 WWW = "https://www.olx.ua"
 POSTING = "https://posting-services.prd.01.eu-west-1.eu.olx.org"
+# Постійний вхід: refresh token -> POST login.olx.ua/oauth2/token (так робить сам сайт, HAR 03.11.2026).
+# client_id і redirect_uri — публічні значення застосунку сайту (видно в будь-якому браузері).
+LOGIN = "https://login.olx.ua"
+OAUTH_CLIENT_ID = "309lsgh0deirlo2la9kmrmhe3v"
+OAUTH_REDIRECT = WWW + "/d/uk/callback/"
+REFRESH_RE = re.compile(r"eyJ[\w.-]{200,}")
 APOLLO = "https://ireland.apollo.olxcdn.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
@@ -110,13 +116,18 @@ class OlxClient:
     Токен беремо з будь-якого з двох файлів (що свіжіший):
       olx_auth.txt    — надісланий рядок Authorization (Bearer …)
       olx_cookies.txt — cookie (якщо в них є токен: access_token / a_access_token / рядок Bearer)
-    Коли токен прострочений — пробуємо оновити (Cognito refresh token з cookie, або кабінет сайту).
+    Коли токен прострочений — оновлюємо: спершу через refresh token (olx_refresh.txt — постійний вхід,
+    окрема сесія лише для бота), далі старі запасні способи (cookie, кабінет сайту).
+    Refresh token ротується: кожне оновлення дає новий, старий стає недійсним — тому зберігаємо його
+    одразу (атомарно) і оновлюємо під файловим замком (бот і програма постингу можуть зробити це одночасно).
     """
     TOKEN_COOKIES = ("access_token", "a_access_token", "accessToken")
 
-    def __init__(self, cookie_path, device_id, log_dir=None, auth_path=None):
+    def __init__(self, cookie_path, device_id, log_dir=None, auth_path=None, refresh_path=None):
         self.cookie_path = cookie_path
         self.auth_path = auth_path
+        self.refresh_path = refresh_path
+        self.refresh_error = None
         self.device_id = device_id
         self.log_dir = log_dir
         raw_c, raw_a = _read(cookie_path), _read(auth_path)
@@ -247,18 +258,79 @@ class OlxClient:
             return True
         return False
 
+    # ------------------------------------------------------------ постійний вхід (refresh token)
+    def _read_refresh(self):
+        m = REFRESH_RE.search(_read(self.refresh_path))
+        return m.group(0) if m else None
+
+    def has_refresh(self):
+        return bool(self.refresh_path and self._read_refresh())
+
+    def _write_refresh(self, token):
+        tmp = self.refresh_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(token)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.refresh_path)        # атомарно: або старий, або новий, ніколи не обрізаний
+
+    def refresh_oauth(self):
+        """Новий access token за refresh token. True/False; причина невдачі — у self.refresh_error."""
+        if not self.has_refresh():
+            self.refresh_error = "refresh token не задано"
+            return False
+        import fcntl
+        with open(self.refresh_path + ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                rt = self._read_refresh()                 # перечитуємо під замком: інший процес міг оновити
+                try:
+                    r = self.s.post(LOGIN + "/oauth2/token", timeout=40,
+                                    headers={**_ua(), "Accept": "*/*", "Origin": WWW, "Referer": WWW + "/",
+                                             "Content-Type": "application/x-www-form-urlencoded"},
+                                    data={"client_id": OAUTH_CLIENT_ID, "redirect_uri": OAUTH_REDIRECT,
+                                          "grant_type": "refresh_token", "refresh_token": rt})
+                except NET_ERRORS as e:
+                    self.refresh_error = f"мережа: {type(e).__name__}"
+                    return False
+                body = self._body(r)
+                d = body if isinstance(body, dict) else {}
+                new_rt, access = d.get("refresh_token"), d.get("access_token")
+                if new_rt and new_rt != rt:
+                    self._write_refresh(new_rt)           # першим ділом: старий уже недійсний
+                self._log("refresh_oauth", "POST", LOGIN + "/oauth2/token", r.status_code,
+                          resp={"keys": sorted(d), "rotated": bool(new_rt and new_rt != rt),
+                                "expires_in": d.get("expires_in"),
+                                "error": None if access else (d.get("error") or str(body)[:200])})
+                if not access:
+                    err = d.get("error") or ""
+                    self.refresh_error = f"HTTP {r.status_code}{' ' + err if err else ''}" + \
+                        (" — вхід скасовано або протух" if err == "invalid_grant" else "")
+                    return False
+                self._save_token(access)
+                self.token_source = "оновлений (постійний вхід)"
+                self.refresh_error = None
+                return True
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def try_refresh(self):
+        if self.has_refresh():
+            return self.refresh_oauth()
         try:
             return self._refresh_cognito() or self._refresh_site()
         except NET_ERRORS:
             return False
 
     def ensure_token(self):
+        left = self.token_expires_in() if self.token else None
+        if self.token and (left is None or left >= 120):
+            return
+        if self.try_refresh():
+            return
+        why = f" (оновлення: {self.refresh_error})" if self.refresh_error else ""
         if not self.token:
-            raise AuthError("немає токена авторизації (рядок Authorization: Bearer …)")
-        left = self.token_expires_in()
-        if left is not None and left < 120 and not self.try_refresh():
-            raise AuthError("токен авторизації прострочений, оновити автоматично не вдалося")
+            raise AuthError("немає входу: ні токена, ні постійного входу" + why)
+        raise AuthError("токен авторизації прострочений, оновити автоматично не вдалося" + why)
 
     def _request(self, step, method, url, headers_fn, retry_auth=True, **kw):
         r = self.s.request(method, url, headers=headers_fn(), timeout=kw.pop("timeout", 60), **kw)

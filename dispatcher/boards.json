@@ -22,6 +22,7 @@
     "enabled": true,
     "needs_techpassport": false,
     "timeout_min": 25,
-    "cookie_hint": "OLX входить не через cookie, а через токен (рядок Authorization).\nДе взяти: у Chrome відкрийте olx.ua (залогіненим) → F12 → Network → оновіть сторінку → у фільтрі напишіть api → клікніть запит до www.olx.ua/api/v1/… (наприклад users/me) → Request Headers → authorization → скопіюйте значення «Bearer eyJ…» і надішліть сюди.\nОкремим разом (знову через «🍪 Cookies» → OLX) можна надіслати й cookie — тоді я спробую сам оновлювати токен, коли він протухне.\nПовідомлення я одразу видалю з чату."
+    "cookie_hint": "OLX: найкраще дати боту ПОСТІЙНИЙ ВХІД — тоді нічого не треба вставляти перед кожною публікацією.\n\n1) Відкрийте нове вікно інкогніто (Ctrl+Shift+N) і увійдіть в olx.ua.\n2) F12 → Console (якщо Chrome попросить — надрукуйте allow pasting і Enter) → вставте рядок нижче → Enter:\n\ncopy('refresh_token: ' + Object.keys(localStorage).filter(k => k.startsWith('@@auth0spajs@@')).map(k => { try { return JSON.parse(localStorage[k]).body.refresh_token } catch (e) {} }).find(Boolean))\n\n3) Одразу закрийте вікно інкогніто. НЕ натискайте «Вийти» — це вимкне вхід бота.\n4) Надішліть сюди скопійоване (починається з refresh_token: eyJ…).\n\nЦей вхід — лише для бота. У звичайному браузері працюйте як завжди, вони не заважають одне одному.\nРазовий варіант (діє 15 хв): рядок Authorization «Bearer eyJ…» з будь-якого запиту до www.olx.ua/api/….\nПовідомлення я одразу видалю з чату.",
+    "keepalive_h": 12
   }
 }

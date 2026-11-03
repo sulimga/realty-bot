@@ -3,6 +3,7 @@ OLX — точка входу для диспетчера (протокол: com
 
     python run.py post --url <посилання CRM> [--dry-run]
     python run.py check
+    python run.py keepalive      # оновити постійний вхід (бот викликає за розкладом, boards.json keepalive_h)
 
 Вміє: будинки, квартири (продаж і довгострокова оренда), комерцію всіх типів (продаж і оренда).
 Категорії й обов'язкові поля — з categories.json (див. mapping.py).
@@ -10,7 +11,9 @@ OLX — точка входу для диспетчера (протокол: com
 оплату/активацію в кабінеті OLX — у категорії нерухомості розміщення платне.
 --dry-run: усе зібрати й показати, нічого не відправляти на OLX (фото теж не вантажаться).
 
-Дані: $REALTY_DATA_DIR/secrets/olx_cookies.txt, $REALTY_DATA_DIR/olx/{config.json,logs,runs}
+Дані: $REALTY_DATA_DIR/secrets/olx_{auth,refresh,cookies}.txt, $REALTY_DATA_DIR/olx/{config.json,logs,runs}
+Постійний вхід: olx_refresh.txt — refresh token окремої сесії (вхід в інкогніто лише для бота, див. cookie_hint
+у dispatcher/boards.json). З ним access token (живе 15 хв) оновлюється сам.
 """
 
 import argparse
@@ -41,6 +44,7 @@ ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")   # «�
 BOARD_DIR = os.path.join(DATA, "olx")
 COOKIES = os.path.join(DATA, "secrets", "olx_cookies.txt")
 AUTH = os.path.join(DATA, "secrets", "olx_auth.txt")
+REFRESH = os.path.join(DATA, "secrets", "olx_refresh.txt")
 CONFIG = os.path.join(BOARD_DIR, "config.json")
 os.makedirs(BOARD_DIR, exist_ok=True)
 
@@ -76,7 +80,7 @@ def save_cfg(cfg):
 
 def make_client(cfg, check_token=True):
     c = OlxClient(COOKIES if os.path.exists(COOKIES) else None, cfg["device_id"],
-                  log_dir=os.path.join(BOARD_DIR, "logs"), auth_path=AUTH)
+                  log_dir=os.path.join(BOARD_DIR, "logs"), auth_path=AUTH, refresh_path=REFRESH)
     if check_token:
         c.ensure_token()
     return c
@@ -586,9 +590,28 @@ def cmd_post(a):
             pass
 
 
+def cmd_keepalive(a):
+    """Оновлює постійний вхід (і заразом не дає йому «заснути»). Без refresh token — нічого не робить."""
+    cfg = load_cfg()
+    client = make_client(cfg, check_token=False)
+    if not client.has_refresh():
+        bp.result(True, "OLX: постійного входу нема — пропускаю", skipped=True)
+        return
+    if not client.refresh_oauth():
+        bp.result(False, f"OLX: постійний вхід не оновився ({client.refresh_error}). Якщо повториться — "
+                         f"увійдіть в OLX в інкогніто і надішліть новий refresh token: 🍪 Cookies → OLX")
+        return
+    bp.result(True, f"OLX: вхід оновлено, токен діє ще {fmt_left(client.token_expires_in())}")
+
+
 def cmd_check(a):
     cfg = load_cfg()
     client = make_client(cfg, check_token=False)
+    if client.has_refresh():
+        ok = client.refresh_oauth()
+        print("Постійний вхід (refresh token): " + ("працює ✅" if ok else f"НЕ працює ❌ ({client.refresh_error})"))
+    else:
+        print("Постійний вхід (refresh token): не задано — токен доведеться вставляти вручну кожні 15 хв")
     d = client.describe()
     names = d["cookie_names"]
     keyish = [n for n in names if any(x in n.lower() for x in ("token", "refresh", "auth", "session", "sid"))]
@@ -600,11 +623,11 @@ def cmd_check(a):
     else:
         print("Токена (Authorization: Bearer …) не знайшов")
     print("Зв'язок із OLX: " + "; ".join(client.probe()))
-    rep = client.token_report()
+    rep = client.token_report() if not client.has_refresh() else []
     for x in rep:
         print(f"• токен з {x['src']}: видавець …{x['iss']}, тип {x['use'] or '?'}, діє ще {x['left_min']} хв "
               f"(всього живе {x['life_min']} хв) → users/me: HTTP {x['users_me']}")
-    if not rep:
+    if not rep and not client.has_refresh():
         print("• жодного токена (eyJ…) не знайшов ні в Authorization, ні в cookie")
     good = [x for x in rep if x["users_me"] == 200]
     if good:
@@ -617,8 +640,8 @@ def cmd_check(a):
 
 def finish_error(e):
     if isinstance(e, AuthError):
-        bp.result(False, f"OLX: немає входу — {e}.\nОновіть: кнопка «🍪 Cookies» → OLX, надішліть рядок "
-                         f"Authorization (Bearer …) з будь-якого запиту до www.olx.ua/api/…")
+        bp.result(False, f"OLX: немає входу — {e}.\nНалаштуйте постійний вхід: кнопка «🍪 Cookies» → OLX "
+                         f"(там інструкція), або разово надішліть рядок Authorization (Bearer …)")
     elif isinstance(e, NET_ERRORS):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")
     elif isinstance(e, (OlxError, SystemExit)):
@@ -636,9 +659,10 @@ def main():
     p.add_argument("--techpassport", nargs="*", default=[])   # для сумісності з ботом; OLX не потребує
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("check")
+    sub.add_parser("keepalive")
     a = ap.parse_args()
     try:
-        {"post": cmd_post, "check": cmd_check}[a.cmd](a)
+        {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive}[a.cmd](a)
     except BaseException as e:  # noqa: BLE001
         finish_error(e)
     finally:
