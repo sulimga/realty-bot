@@ -10,7 +10,9 @@ import re
 
 CATEGORY_HOUSE_SALE = 1602
 MAX_PHOTOS = {CATEGORY_HOUSE_SALE: 24}
-TITLE_MIN, TITLE_MAX = 16, 70
+# Заголовок: без категорії сайт пускає до 70 символів, з обраною категорією — до 150.
+# Ми завжди шлемо category_id, тож межа 150.
+TITLE_MIN, TITLE_MAX = 16, 150
 DESC_MIN, DESC_MAX = 80, 9000
 
 HOUSE_KINDS = {

@@ -358,8 +358,11 @@ def cmd_post(a):
         print(f"      {place}")
 
         cands = M.title_candidates(estate, params, city)
-        kind, title = bp.ask_choice(f"OLX: заголовок ({M.TITLE_MIN}–{M.TITLE_MAX} символів). Оберіть або напишіть свій",
-                                    [(t, t) for t in cands], allow_text=True)
+        # кнопки в боті обрізають текст, тому повні варіанти — в самому питанні
+        listing = "\n".join(f"{i}. {t} ({len(t)})" for i, t in enumerate(cands, 1))
+        kind, title = bp.ask_choice(f"OLX: заголовок ({M.TITLE_MIN}–{M.TITLE_MAX} символів). "
+                                    f"Оберіть або напишіть свій\n{listing}",
+                                    [(t, f"{i}. {t}") for i, t in enumerate(cands, 1)], allow_text=True)
         title = (title or cands[0]).strip()
         while not (M.TITLE_MIN <= len(title) <= M.TITLE_MAX):
             t = bp.ask_text(f"OLX: заголовок має бути {M.TITLE_MIN}–{M.TITLE_MAX} символів, зараз {len(title)}. Напишіть інший")
