@@ -194,14 +194,15 @@ URL-патерн і інший cookie, ніж публічна презента�
   (`boards.json` → `keepalive_h`) запускає `run.py keepalive` у фоні й пише лише коли зламалось / знову працює.
   /status: «постійний вхід ✓». Скільки живе refresh token — невідомо (з'ясуємо на практиці).
   Разовий варіант — як раніше: рядок Authorization (Bearer …), діє 15 хв.
-  **Вхід за посиланням (для клієнтів, ЕКСПЕРИМЕНТ 03.11.2026, ще не перевірено на живому OLX):**
+  **Вхід за посиланням (основний спосіб для клієнтів; перевірено 03.11.2026 — спрацював з першої спроби, зі scope):**
   «🍪 Cookies → OLX → 🔗 Увійти за посиланням» → `run.py login`: OAuth code + PKCE —
   `login.olx.ua/oauth2/authorize?client_id=…&response_type=code&redirect_uri=https://www.olx.ua/d/uk/callback/&state&code_challenge(S256)`
   (спершу scope «openid profile email offline_access», якщо користувач пише «помилка» — без scope) → людина
   входить на сайті OLX (пароль бачить лише OLX) → надсилає адресу …/callback/?code=…&state=… (бот видаляє
   повідомлення: ask з `secret`) → обмін `grant_type=authorization_code` + code_verifier → refresh token у
-  `olx_refresh.txt`. Невідомо: чи лишається code в адресі (сторінка callback сайту може перекинути далі — тоді
-  з історії браузера) і чи OLX прийме PKCE/scope. Ручний варіант — «🔑 Вставити токен / cookie вручну».
+  `olx_refresh.txt`. OLX приймає PKCE і scope «openid profile email offline_access»; code лишається в адресі
+  (про всяк випадок у підказці — історія браузера). Ручний варіант — «🔑 Вставити токен / cookie вручну».
+  Ще невідомо, скільки живе вхід (refresh token) — з'ясуємо на практиці (бот напише, коли протухне).
   Протокол: `bp.ask_text(…, secret=True)` → у питанні `"secret": true`, бот видаляє повідомлення-відповідь.
   boards.json: `login_cmd` (кнопка входу за посиланням), `keepalive_h` (фонове оновлення входу).
 - **CloudFront** блокує звичайні Python-запити (403) — використовується `curl_cffi` з імітацією Chrome.
