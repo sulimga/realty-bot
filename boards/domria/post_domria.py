@@ -40,7 +40,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 POSTED_DIR = os.path.join(HERE, "posted")
 
 DEFAULT_CONFIG = {
-    "user_id": 9252610,
+    # ID акаунта dom.ria, ВІД ІМЕНІ ЯКОГО публікуємо. Зашивати не можна: dom.ria записує оголошення
+    # на цей ID навіть із cookie іншого акаунта (04.11.2026 оголошення зі слота колеги впали на мій акаунт).
+    # Задається в $REALTY_DATA_DIR/domria/config.json (run.py визначає з сесії або питає один раз).
+    "user_id": None,
     "cookies_file": "cookies.txt",
     "commission": 5,                       # % — як у вашому ручному оголошенні; null щоб не вказувати
     "offer_type_label": "від посередника",
@@ -76,7 +79,10 @@ def load_cookies(cfg):
 
 def make_client(cfg, need_auth=True):
     cookie = load_cookies(cfg) if need_auth else ""
-    return DomRiaClient(cookie, cfg["user_id"], log_dir=os.path.join(HERE, "logs"))
+    if need_auth and not cfg.get("user_id"):
+        sys.exit("Не задано user_id акаунта dom.ria (config.json) — без нього оголошення може потрапити "
+                 "на чужий акаунт.")
+    return DomRiaClient(cookie, cfg.get("user_id") or 0, log_dir=os.path.join(HERE, "logs"))
 
 
 # ---------------------------------------------------------------- гео

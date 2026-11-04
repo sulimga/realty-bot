@@ -11,6 +11,7 @@ dom.ria — точка входу для диспетчера (протокол:
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -73,12 +74,100 @@ def _save_and_remember(self, payload, step="main_chars"):
 domria_client.DomRiaClient.save_realty = _save_and_remember
 
 
+CONFIG_PATH = os.path.join(BOARD_DIR, "config.json")
+ID_KEYS = ("userid", "user_id", "userId".lower())
+
+
+def _find_user_id(obj):
+    """Шукає в JSON відповіді dom.ria поле на кшталт userId/user_id з числом (ID акаунта)."""
+    found = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if str(k).lower().replace("-", "_") in ID_KEYS:
+                    try:
+                        if int(v) > 1000:
+                            found.append(int(v))
+                    except (TypeError, ValueError):
+                        pass
+                walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+    walk(obj)
+    return found[0] if len(set(found)) == 1 else None
+
+
+def _keys_outline(obj, depth=0):
+    """Лише назви полів (без значень) — щоб без витоку даних побачити, як виглядає відповідь."""
+    if isinstance(obj, dict) and depth < 2:
+        return "{" + ", ".join(f"{k}: {_keys_outline(v, depth + 1)}" if isinstance(v, (dict, list)) else str(k)
+                               for k in list(obj)[:15] for v in [obj[k]]) + "}"
+    if isinstance(obj, list):
+        return f"[{len(obj)}]"
+    return "…"
+
+
+def _save_user_id(uid):
+    cfg = {}
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    cfg["user_id"] = int(uid)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def resolve_user_id(cfg):
+    """
+    ID акаунта dom.ria, від імені якого публікуємо (dom.ria записує оголошення на ЦЕЙ ID, а не на
+    власника cookie). Порядок: з сесії (cookie) → з config.json цього користувача → питаємо один раз.
+    Якщо ID із сесії і з налаштувань різні — зупиняємось: інакше оголошення піде на чужий акаунт.
+    """
+    configured = cfg.get("user_id")
+    session_id, outline = None, ""
+    try:
+        bal = domria_client.DomRiaClient(P.load_cookies(cfg), 0, log_dir=os.path.join(BOARD_DIR, "logs")).check_auth()
+        session_id = _find_user_id(bal)
+        outline = _keys_outline(bal)
+    except domria_client.AuthError:
+        raise
+    except Exception:  # noqa: BLE001 — визначення з сесії не обов'язкове
+        pass
+    if session_id:
+        if configured and int(configured) != session_id:
+            raise domria_client.DomRiaError(
+                f"cookie належать акаунту dom.ria № {session_id}, а в налаштуваннях записано № {configured}. "
+                f"Щоб не викласти на чужий акаунт — зупиняюсь. Якщо cookie правильні, видаліть user_id "
+                f"з {CONFIG_PATH} (або скажіть адміністратору).")
+        if not configured:
+            _save_user_id(session_id)
+            bp.info(f"dom.ria: акаунт № {session_id} (визначено з cookie, запам'ятав)")
+        cfg["user_id"] = session_id
+        return cfg
+    if configured:
+        return cfg
+    if outline:
+        print(f"[dom.ria] у відповіді балансу немає ID акаунта; поля: {outline}", file=sys.stderr)
+    ans = bp.ask_text("dom.ria: номер (ID) вашого акаунта dom.ria — від його імені будуть оголошення. "
+                      "Лише цифри. Він є в кабінеті dom.ria (профіль). Питаю один раз.")
+    uid = re.sub(r"\D", "", ans or "")
+    if not uid or int(uid) < 1000:
+        raise domria_client.DomRiaError("без ID акаунта dom.ria не публікую — інакше оголошення може "
+                                        "потрапити на чужий акаунт. Спробуйте ще раз і вкажіть ID.")
+    _save_user_id(uid)
+    cfg["user_id"] = int(uid)
+    bp.info(f"dom.ria: запам'ятав акаунт № {uid}")
+    return cfg
+
+
 def load_cfg():
     if not os.path.exists(COOKIES) or not open(COOKIES, encoding="utf-8").read().strip():
         raise domria_client.DomRiaError("немає cookie. Додайте їх: кнопка «🍪 Cookies» → dom.ria")
     cfg = P.load_config()
     cfg["cookies_file"] = COOKIES
-    return cfg
+    return resolve_user_id(cfg)
 
 
 def finish_error(e):
