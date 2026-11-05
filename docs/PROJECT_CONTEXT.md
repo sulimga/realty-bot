@@ -87,7 +87,7 @@ URL-патерн і інший cookie, ніж публічна презента�
 
 ## 6. dom.ria
 - Авторизація: cookie. Створення: `/node/saveRealty` (→ realty_id, beautiful_url), фото
-  `9.riastatic.com/upload/v4/` + `/node/savePhotosOrdering/`.
+  `8.riastatic.com/upload/v4/` (з 11.2026; раніше 9.riastatic — перестав відповідати; у коді список хостів із запасним) + `/node/savePhotosOrdering/`.
 - Техпаспорт: `/uploadfile/` (entity_type=techpassport) → `/v1/api/inspections/sendRealtyDataAndCreateInspectionOrder/`
   → `/node/api/publishByVideoInspection/`. З техпаспортом публікація безкоштовна. Без нього — чернетка
   (потім «📎 Техпаспорт до чернетки»). Кілька фото/тека → склеюються в один PDF (з EXIF-поворотом).
