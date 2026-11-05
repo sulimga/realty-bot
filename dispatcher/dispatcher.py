@@ -18,6 +18,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 REGISTRY = os.path.join(ROOT, "dispatcher", "boards.json")
+RUNNING = {}                   # id -> {"proc", "cancelled"} — програми сайтів, що працюють зараз
 ASK_TIMEOUT = 15 * 60          # скільки чекати відповіді на питання, сек
 JOURNAL = os.path.join(DATA, "journal.jsonl")
 FRAME_RE = re.compile(r'File "([^"]+)", line (\d+) in (\S+)')
@@ -53,6 +54,20 @@ async def _dump_stack(proc, stderr_path, start_pos):
             return where_stuck(f.read())
     except (ProcessLookupError, OSError):
         return ""
+
+
+def cancel_all():
+    """Зупинити всі програми сайтів, що працюють (команда /cancel). Повертає кількість зупинених."""
+    n = 0
+    for entry in list(RUNNING.values()):
+        if entry["proc"].returncode is None:
+            entry["cancelled"] = True
+            try:
+                entry["proc"].kill()
+                n += 1
+            except ProcessLookupError:
+                pass
+    return n
 
 
 def boards(enabled_only=True):
@@ -113,6 +128,8 @@ async def run(board_key, argv, on_info, on_ask):
 
         result = None
         deadline = time.monotonic() + 60 * float(b.get("timeout_min", 25))
+        run_id = id(proc)
+        RUNNING[run_id] = entry = {"proc": proc, "cancelled": False}
 
         async def read_loop():
             nonlocal result, deadline
@@ -159,7 +176,13 @@ async def run(board_key, argv, on_info, on_ask):
         except asyncio.CancelledError:
             proc.kill()
             raise
+        finally:
+            RUNNING.pop(run_id, None)
 
+    if entry["cancelled"] and not (result or {}).get("ok"):
+        result = {"ok": False, "cancelled": True,
+                  "text": f"{b['title']}: зупинено командою /cancel. Якщо чернетку вже було створено — "
+                          f"вона лишилась у кабінеті сайту."}
     if result is None:
         tail = ""
         try:

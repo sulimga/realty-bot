@@ -214,13 +214,17 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pa = ctx.application.bot_data.get("pending_ask")
     if pa and not pa["future"].done():
         pa["future"].set_result({})
-    batch = ctx.application.bot_data.get("batch")
+    bd = ctx.application.bot_data
+    batch = bd.get("batch")
     reset(ctx)
+    bd["cancel_publish"] = True              # do_publish не запускатиме наступні сайти
     if batch:
         batch["stop"] = True
-        return await update.message.reply_text(f"⏹ Пакет зупиниться після поточного оголошення "
-                                               f"({batch['i']}/{batch['n']}).", reply_markup=MENU)
-    await update.message.reply_text("Скасовано.", reply_markup=MENU)
+    killed = D.cancel_all()                  # зупиняємо програму сайту, що працює зараз
+    if batch:
+        return await update.message.reply_text(f"⏹ Пакет зупинено ({batch['i']}/{batch['n']}). "
+                                               f"Підсумок прийде окремим повідомленням.", reply_markup=MENU)
+    await update.message.reply_text("⏹ Публікацію зупинено." if killed else "Скасовано.", reply_markup=MENU)
 
 
 async def cmd_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -531,11 +535,15 @@ async def addr_next(chat_id, ctx):
 
 
 async def do_publish(chat_id, ctx):
-    s = st(ctx)
-    ctx.application.bot_data["busy"] = True
+    s = dict(st(ctx))                        # копія: /cancel може очистити стан посеред публікації
+    bd = ctx.application.bot_data
+    bd["busy"] = True
+    bd["cancel_publish"] = False
     try:
         reg = D.boards()
-        for key in s["selected"]:
+        for key in list(s["selected"]):
+            if bd.get("cancel_publish"):
+                break
             argv = ["post", "--url", s["url"]]
             if reg[key].get("needs_techpassport") and s.get("files"):
                 argv += ["--techpassport", *s["files"]]
