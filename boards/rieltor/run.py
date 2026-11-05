@@ -246,7 +246,7 @@ def cmd_post(a):
                      f"будинок «{pa.get('house')}». Знайдено на rieltor.ua: "
                      f"{'так' if g.get('matched') else 'НЕ повністю'} (cityId={payload.get('cityId')}, "
                      f"districtId={payload.get('districtId')}, streetId={payload.get('streetId')}, "
-                     f"houseId={payload.get('houseId')}). Спробуйте «📍 Змінити адресу»")
+                     f"houseId={payload.get('houseId')}). Вулиці, які віддав rieltor.ua: {g.get('street_candidates')}. Спробуйте «📍 Змінити адресу»")
         bp.result(False, f"rieltor: сервер повернув помилку {resp.status_code}: {str(body)[:500]}{extra}")
 
 

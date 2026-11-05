@@ -581,6 +581,7 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             complex_query=complex_name,
             fix_district=(item_type == 1),
             district_id_override=ov.get("district_id"),
+            require_house=(item_type in (1, 2)),
         )
 
     if geo.get("matched"):

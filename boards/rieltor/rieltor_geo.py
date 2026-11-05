@@ -41,6 +41,22 @@ def _normalize_street(name: str) -> str:
     return name.strip().lower()
 
 
+def _street_query_variants(street_query: str) -> list:
+    """Запити для пошуку вулиці: як є, без префікса «вул.», потім окремі слова (найдовше першим) —
+    у CRM пишуть «Тараса Григоровича Шевченка», а на rieltor.ua вулиця може бути «Шевченка»."""
+    base = _PREFIX_RE.sub("", street_query or "").strip()
+    out = [street_query, base]
+    words = [w for w in re.split(r"[\s\-]+", base) if len(w) > 3]
+    words = words[-1:] if len(words) > 1 else []        # лише останнє слово (прізвище): «Шевченка»
+    out += words
+    seen, res = set(), []
+    for q in out:
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            res.append(q)
+    return res
+
+
 def _pick_best_street(candidates: list, query: str | None):
     """Серед кандидатів (звужених по ЖК) обирає найбільш схожий на текст із CRM."""
     if not candidates:
@@ -149,6 +165,7 @@ def resolve_address(
     complex_query: str | None = None,
     fix_district: bool = False,
     district_id_override: int | None = None,
+    require_house: bool = True,
 ) -> dict:
     """
     Повертає словник із ключами, готовими лягти прямо в payload /api/offers/:
@@ -254,8 +271,14 @@ def resolve_address(
 
     # --- Крок 4: вулиця + будинок по всьому місту/району ---
     if street_query:
-        streets = client.search_streets(street_query, result["cityId"], district_id)
-        street = _best_match(streets)
+        streets, street = [], None
+        for q in _street_query_variants(street_query):
+            streets = client.search_streets(q, result["cityId"], district_id)
+            result.setdefault("street_candidates", [c.get("name") for c in streets[:5]])
+            street = _best_match(streets)
+            if street and street.get("isMatched"):
+                break
+            street = None
         if street and street.get("isMatched"):
             street_id = int(street["streetId"])
             result["streetId"] = street_id
@@ -275,6 +298,11 @@ def resolve_address(
             if result["houseId"] is not None:
                 result["matched"] = True
                 result["method"] = "street_chain"
+                return result
+            if not require_house:
+                # будинки/комерція/земля: номер будинку не обов'язковий — досить знайденої вулиці
+                result["matched"] = True
+                result["method"] = "street_only"
                 return result
             # немає houseId -> не лишаємо "напівструктуровану" адресу
             result["streetId"] = None
