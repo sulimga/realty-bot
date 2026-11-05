@@ -1178,7 +1178,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         key = data[3:]
         await q.edit_message_reply_markup(None)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Увійти за посиланням (просто)", callback_data=f"lg:{key}")],
-                                   [InlineKeyboardButton("🔑 Вставити токен / cookie вручну", callback_data=f"ckm:{key}")]])
+                                   [InlineKeyboardButton("🔑 Тимчасовий токен / cookie (вручну)", callback_data=f"ckm:{key}")]])
         return await ctx.bot.send_message(chat_id, f"{D.boards()[key]['title']}: як дати боту вхід?", reply_markup=kb)
 
     if data.startswith("ck:") or data.startswith("ckm:"):
