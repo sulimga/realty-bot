@@ -16,7 +16,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE = "https://dom.ria.com"
-PHOTO_UPLOAD_URL = "https://9.riastatic.com/upload/v4/"
+# Хост завантаження фото dom.ria інколи міняють (у листопаді 2026: 9 → 8). Беремо перший, що відповідає,
+# і запам'ятовуємо його до кінця запуску.
+PHOTO_UPLOAD_URLS = ["https://8.riastatic.com/upload/v4/", "https://9.riastatic.com/upload/v4/"]
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
@@ -196,9 +198,17 @@ class DomRiaClient:
             "file0": ("blob", image_bytes, content_type),
         }
         # Форма шле це на інший домен без cookie (axios без withCredentials)
-        r = self.s.post(PHOTO_UPLOAD_URL, files=files,
-                        headers=self._h("/v2/new_design/uk/add_form/photo?onSite=0", auth=False),
-                        timeout=90)
+        for n, url in enumerate(list(PHOTO_UPLOAD_URLS)):
+            try:
+                r = self.s.post(url, files=files,
+                                headers=self._h("/v2/new_design/uk/add_form/photo?onSite=0", auth=False),
+                                timeout=90)
+                break
+            except requests.ConnectionError:
+                if n == len(PHOTO_UPLOAD_URLS) - 1:
+                    raise
+                PHOTO_UPLOAD_URLS.remove(url)          # непрацюючий хост — у кінець списку
+                PHOTO_UPLOAD_URLS.append(url)
         body = self._json(r, "upload_photo", {"realtyId": realty_id, "bytes": len(image_bytes)})
         ids = [n for k, n in find_ids(body, min_value=10_000_000) if "realty" not in k.lower()]
         if not ids:
