@@ -196,6 +196,10 @@ def cmd_post(a):
                          f"в описі CRM — пропущено")
         return
 
+    if a.lun_top:
+        payload["pickupLunTop"] = 1
+        bp.info("Підключаю «ЛУН топ» разом з публікацією")
+
     # Що не вдалось заповнити (будь-яка категорія) — питаємо; у пакеті — пропускаємо з поясненням
     if not resolve_missing(payload, client, crm, a.no_ask):
         return
@@ -337,6 +341,7 @@ def main():
     p.add_argument("--url", required=True)
     p.add_argument("--techpassport", nargs="*", default=[])   # rieltor не потребує — ігноруємо
     p.add_argument("--no-ask", action="store_true")            # пакетний режим: нічого не питати
+    p.add_argument("--lun-top", action="store_true")           # підключити «ЛУН топ» одразу при публікації
     p.add_argument("--district-id", type=int)                  # адреса, виправлена вручну в боті
     p.add_argument("--street")
     p.add_argument("--house")

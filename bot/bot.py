@@ -468,6 +468,10 @@ async def ask_techpassport(chat_id, ctx):
                                         "(можна кілька). Потім натисніть «Готово».", reply_markup=kb)
 
 
+def lun_button(s):
+    return InlineKeyboardButton(("☑" if s.get("lun_top") else "☐") + " Підключити ЛУН топ", callback_data="lun_toggle")
+
+
 async def confirm_publish(chat_id, ctx):
     s = st(ctx)
     s["mode"] = "confirm"
@@ -479,6 +483,7 @@ async def confirm_publish(chat_id, ctx):
         extra = f"\n📎 Техпаспорт: {len(tp)} файл(ів)" if tp else "\n📎 Без техпаспорта — на dom.ria буде чернетка"
     rows = [[InlineKeyboardButton("🚀 Опублікувати", callback_data="publish")]]
     if "rieltor" in s["selected"]:
+        rows.append([lun_button(s)])
         rows.append([InlineKeyboardButton("📍 Змінити адресу", callback_data="addr_edit")])
         ad = s.get("addr") or {}
         if ad:
@@ -547,6 +552,8 @@ async def do_publish(chat_id, ctx):
             argv = ["post", "--url", s["url"]]
             if reg[key].get("needs_techpassport") and s.get("files"):
                 argv += ["--techpassport", *s["files"]]
+            if key == "rieltor" and s.get("lun_top"):
+                argv += ["--lun-top"]
             if key == "rieltor" and s.get("addr"):
                 ad = s["addr"]
                 if ad.get("district_id"):
@@ -1092,6 +1099,13 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reset(ctx)
             return
         return await confirm_publish(chat_id, ctx)
+
+    if data == "lun_toggle" and s.get("mode") == "confirm":
+        s["lun_top"] = not s.get("lun_top")
+        rows = [list(r) for r in q.message.reply_markup.inline_keyboard]
+        rows = [[lun_button(s)] if r and r[0].callback_data == "lun_toggle" else r for r in rows]
+        await q.edit_message_reply_markup(InlineKeyboardMarkup(rows))
+        return
 
     if data == "addr_edit" and s.get("mode") == "confirm":
         await q.edit_message_reply_markup(None)
