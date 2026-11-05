@@ -42,12 +42,12 @@ def _normalize_street(name: str) -> str:
 
 
 def _street_query_variants(street_query: str) -> list:
-    """Запити для пошуку вулиці: як є, без префікса «вул.», потім окремі слова (найдовше першим) —
+    """Запити для пошуку вулиці: як є, без префікса «вул.», потім кожне слово окремо (з кінця) —
     у CRM пишуть «Тараса Григоровича Шевченка», а на rieltor.ua вулиця може бути «Шевченка»."""
     base = _PREFIX_RE.sub("", street_query or "").strip()
     out = [street_query, base]
-    words = [w for w in re.split(r"[\s\-]+", base) if len(w) > 3]
-    words = words[-1:] if len(words) > 1 else []        # лише останнє слово (прізвище): «Шевченка»
+    words = [w for w in re.split(r"[\s\-]+", base) if len(w) > 2]
+    words = words[::-1] if len(words) > 1 else []       # кожне слово окремо, з кінця: «Шевченка», «Григоровича», «Тараса»
     out += words
     seen, res = set(), []
     for q in out:
