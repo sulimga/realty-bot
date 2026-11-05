@@ -203,6 +203,11 @@ URL-патерн і інший cookie, ніж публічна презента�
   «🔑 Тимчасовий токен / cookie (вручну)» повернено підказку про тимчасовий токен (Bearer, ~15 хв) на першому місці;
   refresh_token-вставка лишилась як додаткова. Ідея на потім: розширення Chrome, що саме збирає токен/cookie
   (з HttpOnly) і кладе в буфер одним кліком; повністю автоматично — лише з публічним HTTPS-ендпойнтом на сервері.
+  Зроблено: `extension/olx-cookies/` (Chrome MV3, режим розробника; див. README у папці): ловить Authorization на
+  www.olx.ua/api (webRequest), бере cookie olx.ua (chrome.cookies, без аналітики), кладе в буфер «Authorization: Bearer …\nCookie: …».
+  Розширення нічого не шле саме. Chrome для Android розширення не підтримує (на мобільному — Firefox/Quetta/Helium).
+  План розширення: авто-відправка на сервер (потрібні домен + HTTPS), презентації для клієнтів зі сторінок OLX/dom.ria/rieltor.ua
+  (фото з webp у jpeg, у Telegram/CRM), збір cookie й для інших сайтів.
   **Вхід за посиланням (основний спосіб для клієнтів; перевірено 03.11.2026 — спрацював з першої спроби, зі scope):**
   «🍪 Cookies → OLX → 🔗 Увійти за посиланням» → `run.py login`: OAuth code + PKCE —
   `login.olx.ua/oauth2/authorize?client_id=…&response_type=code&redirect_uri=https://www.olx.ua/d/uk/callback/&state&code_challenge(S256)`

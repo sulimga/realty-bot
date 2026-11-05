@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Автобот — вхід для бота",
+  "version": "0.1.0",
+  "description": "Збирає токен і cookie OLX з вашого браузера та копіює їх одним кліком для Telegram-бота.",
+  "permissions": ["cookies", "webRequest", "storage", "activeTab", "clipboardWrite"],
+  "host_permissions": ["https://*.olx.ua/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Автобот: вхід OLX", "default_popup": "popup.html" }
+}
