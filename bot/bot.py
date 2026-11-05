@@ -256,6 +256,10 @@ async def cmd_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     files = [os.path.join(logs_dir, f) for f in os.listdir(logs_dir)] if os.path.isdir(logs_dir) else []
     if os.path.exists(D.JOURNAL):
         files.append(D.JOURNAL)
+    runs = os.path.join(DATA, "rieltor", "runs")          # дані останньої публікації rieltor (адреса, payload)
+    if os.path.isdir(runs):
+        last = sorted(os.listdir(runs))[-1:]
+        files += [os.path.join(runs, f) for f in last]
     if not files:
         await update.message.reply_text("Логів поки немає.")
         return

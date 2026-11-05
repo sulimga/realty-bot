@@ -238,7 +238,16 @@ def cmd_post(a):
     elif resp.status_code in (401, 403):
         bp.result(False, "rieltor: cookie застаріли. Оновіть: кнопка «🍪 Cookies» → rieltor", stop_batch=True)
     else:
-        bp.result(False, f"rieltor: сервер повернув помилку {resp.status_code}: {str(body)[:500]}")
+        extra = ""
+        if "address_invalid" in str(body):
+            g = payload.get("_geo_debug") or {}
+            pa = payload.get("_parsed_address") or {}
+            extra = (f"\nАдреса з CRM: місто «{pa.get('city')}», район «{pa.get('district')}», вулиця «{pa.get('street')}», "
+                     f"будинок «{pa.get('house')}». Знайдено на rieltor.ua: "
+                     f"{'так' if g.get('matched') else 'НЕ повністю'} (cityId={payload.get('cityId')}, "
+                     f"districtId={payload.get('districtId')}, streetId={payload.get('streetId')}, "
+                     f"houseId={payload.get('houseId')}). Спробуйте «📍 Змінити адресу»")
+        bp.result(False, f"rieltor: сервер повернув помилку {resp.status_code}: {str(body)[:500]}{extra}")
 
 
 def cmd_districts(a):
