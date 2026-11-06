@@ -244,6 +244,31 @@ def delete_offer(offer_id: int, cookie: str):
     return resp.status_code, body
 
 
+PRICE_KEYS = ("price", "priceUsd", "price_usd", "priceValue")
+CURRENCY_KEYS = ("currencyMagic", "currency", "currencyId")
+USD_VALUES = (2, "2", "USD", "usd", "$")
+
+
+def offer_price_usd(o: dict):
+    """Ціна в $ або None, якщо поля ціни немає чи валюта не долар."""
+    price = _get_int(o, PRICE_KEYS)
+    if price is None:
+        return None
+    cur = next((o[k] for k in CURRENCY_KEYS if o.get(k) not in (None, "")), None)
+    if cur is not None and cur not in USD_VALUES:
+        return None
+    return price
+
+
+def filter_below_price(offers: list, below: int):
+    """→ (дешевші за below $, пропущено через невідому ціну/валюту). Якщо в списку немає поля ціни — FilterUnavailable."""
+    if offers and not any(_get_int(o, PRICE_KEYS) is not None for o in offers):
+        raise FilterUnavailable("у списку оголошень rieltor не знайдено поля ціни")
+    chosen = [o for o in offers if (offer_price_usd(o) or 10**12) < below]
+    skipped = sum(1 for o in offers if offer_price_usd(o) is None)
+    return chosen, skipped
+
+
 def select_offers(cookie: str, category: str, oper: str):
     """Усі активні оголошення категорії+угоди. → (список, помилка-фільтра або None)."""
     offers = fetch_offers(cookie, log=None)

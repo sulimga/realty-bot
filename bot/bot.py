@@ -52,9 +52,10 @@ BTN_COOKIES = "🍪 Cookies"
 BTN_REFRESH = "🔄 Оновити дати rieltor"
 BTN_DELETE = "🗑 Видалити оголошення rieltor"
 BTN_STATUS = "ℹ️ Статус"
+_ROW_REFRESH = [KeyboardButton(BTN_REFRESH)] + ([KeyboardButton(BTN_DELETE)] if not INSTANCE else [])  # видалення — лише в головному боті
 MENU = ReplyKeyboardMarkup([[KeyboardButton(BTN_POST)],
                             [KeyboardButton(BTN_TP), KeyboardButton(BTN_COOKIES)],
-                            [KeyboardButton(BTN_REFRESH), KeyboardButton(BTN_DELETE)],
+                            _ROW_REFRESH,
                             [KeyboardButton(BTN_STATUS)]],
                            resize_keyboard=True)
 
@@ -913,7 +914,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if ctx.application.bot_data.get("busy"):
             return await update.message.reply_text("Зачекайте, іде інша дія.")
         return await run_board(ctx, update.effective_chat.id, "rieltor", ["refresh"])
-    if text == BTN_DELETE:
+    if text == BTN_DELETE and not INSTANCE:
         if ctx.application.bot_data.get("busy"):
             return await update.message.reply_text("Зачекайте, іде інша дія.")
         return await run_board(ctx, update.effective_chat.id, "rieltor", ["delete"])

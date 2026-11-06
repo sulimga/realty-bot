@@ -307,12 +307,35 @@ def cmd_delete(a):
         if kind != "opt":
             bp.result(False, "rieltor: видалення скасовано")
             return
+    below = a.below
+    if below is None:
+        kind, mode = bp.ask_choice("Що видалити?", [("all", "Усі в категорії"), ("below", "Дешевші за бюджет")])
+        if kind != "opt":
+            bp.result(False, "rieltor: видалення скасовано")
+            return
+        if mode == "below":
+            txt = bp.ask_text("Введіть бюджет в $ — видалю оголошення з ціною НИЖЧЕ за нього (наприклад 50000):")
+            digits = re.sub(r"[^\d]", "", txt or "")
+            if not digits or int(digits) <= 0:
+                bp.result(False, "rieltor: бюджет не розпізнано — видалення скасовано, нічого не видалено")
+                return
+            below = int(digits)
     scope = f"{RF.CATEGORIES[category][0]} / {RF.OPERS[oper][0]}"
+    if below:
+        scope += f" / дешевші за {below:,} $".replace(",", " ")
     bp.info(f"rieltor: шукаю активні оголошення «{scope}»…")
     offers, err = RF.select_offers(cookie, category, oper)
+    skipped = 0
+    if below and not err:
+        try:
+            offers, skipped = RF.filter_below_price(offers, below)
+        except RF.FilterUnavailable as e:
+            err = str(e)
     if err:
         bp.result(False, f"rieltor: категорію не вдалося виділити — {err}. Нічого не видалено")
         return
+    if skipped:
+        bp.info(f"Не враховую {skipped} оголошень без ціни або не в доларах")
     if not offers:
         bp.result(True, f"rieltor: активних оголошень «{scope}» немає")
         return
@@ -360,6 +383,7 @@ def main():
     dl = sub.add_parser("delete")
     dl.add_argument("--category", choices=list(RF.CATEGORIES))
     dl.add_argument("--oper", choices=list(RF.OPERS))
+    dl.add_argument("--below", type=int)
     r = sub.add_parser("refresh")
     r.add_argument("--all", action="store_true")
     r.add_argument("--category", choices=list(RF.CATEGORIES))
