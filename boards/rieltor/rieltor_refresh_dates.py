@@ -249,12 +249,40 @@ CURRENCY_KEYS = ("currencyMagic", "currency", "currencyId")
 USD_VALUES = (2, "2", "USD", "usd", "$")
 
 
+_PRICE_BAD = ("meter", "m2", "sqm", "per", "rate", "commission", "pickup", "old", "prev", "min", "max")
+
+
+def _num(v):
+    if isinstance(v, dict):
+        v = v.get("value", v.get("amount", v.get("id")))
+    try:
+        return int(float(str(v).replace(" ", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_price(o: dict):
+    """(ціна, валюта) з елемента списку: точний ключ price, інакше будь-який ключ із price/cost (крім ціни за м²)."""
+    keys = sorted((k for k in o if isinstance(k, str)
+                   and any(x in k.lower() for x in ("price", "cost"))
+                   and not any(x in k.lower() for x in _PRICE_BAD)),
+                  key=lambda k: (k.lower() not in PRICE_KEYS, len(k)))
+    for k in keys:
+        n = _num(o.get(k))
+        if n:
+            cur = next((o[c] for c in o if isinstance(c, str) and "currency" in c.lower()
+                        and o[c] not in (None, "")), None)
+            return n, cur
+    return None, None
+
+
 def offer_price_usd(o: dict):
-    """Ціна в $ або None, якщо поля ціни немає чи валюта не долар."""
-    price = _get_int(o, PRICE_KEYS)
+    """Ціна в $ або None, якщо ціни немає чи валюта не долар."""
+    price, cur = _find_price(o)
     if price is None:
         return None
-    cur = next((o[k] for k in CURRENCY_KEYS if o.get(k) not in (None, "")), None)
+    if isinstance(cur, dict):
+        cur = cur.get("id", cur.get("value", cur.get("code")))
     if cur is not None and cur not in USD_VALUES:
         return None
     return price
@@ -262,8 +290,9 @@ def offer_price_usd(o: dict):
 
 def filter_below_price(offers: list, below: int):
     """→ (дешевші за below $, пропущено через невідому ціну/валюту). Якщо в списку немає поля ціни — FilterUnavailable."""
-    if offers and not any(_get_int(o, PRICE_KEYS) is not None for o in offers):
-        raise FilterUnavailable("у списку оголошень rieltor не знайдено поля ціни")
+    if offers and not any(_find_price(o)[0] is not None for o in offers):
+        raise FilterUnavailable("у списку оголошень rieltor не знайдено поля ціни. Поля першого оголошення: "
+                                + ", ".join(sorted(str(k) for k in offers[0].keys())))
     chosen = [o for o in offers if (offer_price_usd(o) or 10**12) < below]
     skipped = sum(1 for o in offers if offer_price_usd(o) is None)
     return chosen, skipped
