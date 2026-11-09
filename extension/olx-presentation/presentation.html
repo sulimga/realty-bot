@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>Презентація</title>
+  <link rel="stylesheet" href="presentation.css">
+</head>
+<body>
+  <div class="toolbar no-print">
+    <div class="tb-left">
+      <b>Презентація</b>
+      <span class="src" id="src"></span>
+    </div>
+    <div class="tb-right">
+      <label title="Показувати ціну в презентації"><input type="checkbox" id="showPrice"> Ціна</label>
+      <label title="Прибрати з опису телефони, посилання, email і @нікнейми продавця"><input type="checkbox" id="cleanContacts"> Без контактів продавця</label>
+      <label title="Показувати мої контакти внизу"><input type="checkbox" id="showAgent"> Мої контакти</label>
+      <button id="agentBtn" title="Мої контакти (ім'я, телефон)">⚙</button>
+      <button id="resetBtn" title="Скинути всі правки і взяти дані з OLX заново">↺</button>
+      <button id="debugBtn" title="Зберегти зчитані дані (файл для Claude, якщо щось не так)">🐞</button>
+      <button id="pdfBtn" class="primary">🖨 PDF</button>
+      <button id="tgBtn" class="primary">✈ Telegraph</button>
+    </div>
+    <div id="status" class="status" hidden></div>
+  </div>
+
+  <div id="agentPanel" class="panel no-print" hidden>
+    <b>Мої контакти</b> — показуються внизу презентації і як автор у Telegraph. Зберігаються лише в цьому браузері.
+    <div class="panel-row">
+      <input id="agName" placeholder="Ім'я (напр., Олег Іваненко)">
+      <input id="agPhone" placeholder="Телефон">
+      <input id="agExtra" placeholder="Ще рядок (агенція, Telegram…) — необов'язково">
+      <button id="agSave" class="primary">Зберегти</button>
+    </div>
+  </div>
+
+  <div id="warn" class="warn no-print" hidden></div>
+
+  <main class="sheet" id="sheet" hidden>
+    <header class="head">
+      <div class="head-left">
+        <h1 class="kicker" id="kicker" contenteditable="plaintext-only" spellcheck="false"></h1>
+        <div class="addr" id="addrLine"></div>
+      </div>
+      <div class="price" id="priceBox">
+        <strong id="price" contenteditable="plaintext-only" spellcheck="false"></strong>
+        <span id="unitPrice"></span>
+      </div>
+    </header>
+    <div class="quick" id="quick"></div>
+    <figure class="hero" id="hero"><img id="heroImg" alt="" referrerpolicy="no-referrer"></figure>
+
+    <section>
+      <h3 class="block-title">Параметри</h3>
+      <table class="params"><tbody id="params"></tbody></table>
+      <button id="addRow" class="no-print link">+ додати рядок</button>
+    </section>
+
+    <section id="descSec">
+      <h3 class="block-title">Додаткова інформація</h3>
+      <div class="desc" id="desc" contenteditable="plaintext-only"></div>
+    </section>
+
+    <section id="photoSec">
+      <h3 class="block-title">Фото</h3>
+      <p class="hint no-print">★ — зробити головним (велике фото вгорі), ✕ — прибрати з презентації. Прибрані фото не потрапляють ні в PDF, ні в Telegraph.</p>
+      <div class="gallery" id="gallery"></div>
+    </section>
+
+    <footer class="agent" id="agentBox"></footer>
+  </main>
+
+  <script type="module" src="presentation.js"></script>
+</body>
+</html>
