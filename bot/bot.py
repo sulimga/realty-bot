@@ -866,6 +866,24 @@ async def nb_go(chat_id, ctx):
                                else "❌ Слот не створено — причина в повідомленні вище.", reply_markup=MENU)
 
 
+async def cmd_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Приймальна HTTPS-адреса для OAuth-повернення OLX (deploy/setup-callback.sh). Лише головний бот."""
+    if not is_owner(update):
+        return
+    if ctx.application.bot_data.get("busy"):
+        return await update.message.reply_text("Зачекайте, іде інша дія.")
+    ctx.application.bot_data["busy"] = True
+    chat_id = update.effective_chat.id
+    try:
+        rc = await run_root_script(ctx, chat_id, "🌐 <b>Приймальна адреса для OLX</b>",
+                                   [os.path.join(ROOT, "deploy", "setup-callback.sh")])
+    finally:
+        ctx.application.bot_data["busy"] = False
+    await ctx.bot.send_message(chat_id, "✅ Адреса працює." if rc == 0 else
+                               "❌ Не все вдалося — причина в повідомленні вище. Після виправлення надішліть /callback ще раз.",
+                               reply_markup=MENU)
+
+
 async def cmd_delbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
@@ -1267,6 +1285,7 @@ def main():
         app.add_handler(CommandHandler("newbot", cmd_newbot))
         app.add_handler(CommandHandler("bots", cmd_bots))
         app.add_handler(CommandHandler("delbot", cmd_delbot))
+        app.add_handler(CommandHandler("callback", cmd_callback))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, on_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
