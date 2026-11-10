@@ -8,9 +8,11 @@
     {"type": "ask",    "id": 1, "text": "...",
      "options": [[value, "підпис"], ...] | null,
      "allow_text": true|false,
-     "preview": "..."}                                        — питання користувачу; preview (необов'язково) —
+     "preview": "...", "editor": "заголовок"}                — питання користувачу; preview (необов'язково) —
                                                                 довгий текст, який бот покаже ОКРЕМИМ повідомленням
-                                                                перед питанням (напр. поточний опис, щоб скопіювати)
+                                                                перед питанням (напр. поточний опис, щоб скопіювати);
+                                                                editor — відкрити preview у редакторі (Telegram Mini App),
+                                                                якщо на сервері він є; відповідь — {"text"} як звичайно
     {"type": "result", "ok": true|false, "text": "...",
      "url": "...", "id": "...", "draft": true|false}          — підсумок (останнє повідомлення)
 
@@ -109,11 +111,13 @@ def install_print_hook():
     builtins.print = _protocol_print
 
 
-def ask_choice(text, options=None, allow_text=False, secret=False, preview=None):
+def ask_choice(text, options=None, allow_text=False, secret=False, preview=None, editor=None):
     """
     Поставити питання. options — [(value, label), ...] або None (тільки вільна відповідь).
     secret=True — відповідь містить щось чутливе: бот видалить повідомлення з нею з чату.
     preview — довгий текст окремим повідомленням перед питанням (бот ділить на частини по ~4000 символів).
+    editor  — заголовок редактора: бот дасть кнопку, що відкриває preview для правок (Mini App); якщо редактора
+              на сервері нема — покаже preview повідомленням. Відповідь з редактора приходить як ("text", рядок).
     Повертає ("opt", value) | ("text", рядок) | (None, None) — пропущено.
     value може бути будь-яким об'єктом: назовні передається лише номер варіанта.
     """
@@ -145,7 +149,8 @@ def ask_choice(text, options=None, allow_text=False, secret=False, preview=None)
     _emit({"type": "ask", "id": _ask_counter, "text": full,
            "options": [str(label) for _, label in options] or None,
            "allow_text": allow_text, **({"secret": True} if secret else {}),
-           **({"preview": str(preview)} if preview else {})})
+           **({"preview": str(preview)} if preview else {}),
+           **({"editor": str(editor)} if editor else {})})
     line = sys.stdin.readline()
     if not line:
         return None, None
@@ -160,9 +165,9 @@ def ask_choice(text, options=None, allow_text=False, secret=False, preview=None)
     return None, None
 
 
-def ask_text(text, secret=False, preview=None):
+def ask_text(text, secret=False, preview=None, editor=None):
     """Вільна відповідь. Повертає рядок або None (пропущено)."""
-    kind, val = ask_choice(text, None, True, secret=secret, preview=preview)
+    kind, val = ask_choice(text, None, True, secret=secret, preview=preview, editor=editor)
     return val if kind == "text" else None
 
 

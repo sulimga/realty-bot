@@ -13,14 +13,16 @@ import json
 import logging
 import os
 import re
+import secrets as pysecrets
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
-                      ReplyKeyboardMarkup, Update)
+                      ReplyKeyboardMarkup, Update, WebAppInfo)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
@@ -169,13 +171,99 @@ async def collect_long_answer(pa, text):
     pa["collector"] = asyncio.create_task(finish())
 
 
+# Редактор тексту (Telegram Mini App) — сторінка служби realty-callback (common/oauth_callback.py) за Caddy з HTTPS.
+# Обмін через файли: бот кладе <EDIT_DIR>/<token>.in.json, сторінка після «Зберегти» пише <token>.out.json.
+EDIT_SPOOL = os.environ.get("OAUTH_SPOOL", "/var/lib/realty-oauth")      # як у deploy/setup-callback.sh
+EDIT_DIR = os.path.join(EDIT_SPOOL, "edit")
+EDIT_PORT = int(os.environ.get("OAUTH_PORT", "8099"))
+CADDYFILE = os.environ.get("CADDYFILE", "/etc/caddy/Caddyfile")
+_editor_ok = {"host": None, "at": 0.0}
+
+
+def _editor_host_sync():
+    """Адреса (host) редактора, якщо він налаштований і служба відповідає; інакше None."""
+    try:
+        with open(os.path.join(EDIT_SPOOL, "host.txt"), encoding="utf-8") as f:
+            host = f.read().strip()
+        with open(CADDYFILE, encoding="utf-8") as f:
+            caddy = f.read()
+    except OSError:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", host or "") or "/edit/" not in caddy:   # /callback ще не перезапускали
+        return None
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{EDIT_PORT}/edit/health", timeout=2) as r:
+            return host if r.status == 200 else None
+    except Exception:  # noqa: BLE001 — служба не запущена або стара версія (404)
+        return None
+
+
+async def editor_host():
+    """Вдалу перевірку пам'ятаємо 5 хв; невдалу — ні (щоб після /callback редактор з'явився одразу)."""
+    if _editor_ok["host"] and time.monotonic() - _editor_ok["at"] < 300:
+        return _editor_ok["host"]
+    host = await asyncio.to_thread(_editor_host_sync)
+    _editor_ok.update(host=host, at=time.monotonic())
+    return host
+
+
+def _edit_files(token):
+    return [os.path.join(EDIT_DIR, f"{token}.{k}.json") for k in ("in", "out")]
+
+
+async def open_editor(text, title):
+    """Готує сторінку редактора з текстом. Повертає (token, url) або (None, None), якщо редактора нема."""
+    host = await editor_host()
+    if not host:
+        return None, None
+    token = pysecrets.token_urlsafe(24)
+    try:
+        os.makedirs(EDIT_DIR, mode=0o700, exist_ok=True)
+        path = _edit_files(token)[0]
+        fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"text": text, "title": title, "ts": int(time.time())}, f, ensure_ascii=False)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        log.exception("editor")
+        return None, None
+    return token, f"https://{host}/edit/{token}"
+
+
+async def watch_editor(token, fut, question):
+    """Чекає, поки на сторінці редактора натиснуть «Зберегти», і віддає текст як відповідь на питання."""
+    out = _edit_files(token)[1]
+    while not fut.done():
+        await asyncio.sleep(1)
+        if not os.path.exists(out):
+            continue
+        try:
+            with open(out, encoding="utf-8") as f:
+                text = json.load(f).get("text")
+        except (OSError, ValueError):
+            continue                         # файл ще пишеться — наступного разу
+        if isinstance(text, str) and not fut.done():
+            fut.set_result({"text": text})
+            try:
+                await question.edit_reply_markup(reply_markup=None)
+            except BadRequest:
+                pass
+
+
 async def ask_user(ctx, chat_id, msg):
     """Питання від програми сайту -> кнопки в Telegram. Чекає відповіді.
-    msg["preview"] — довгий текст (напр. поточний опис), окремими звичайними повідомленнями перед питанням."""
+    msg["preview"] — довгий текст (напр. поточний опис), окремими звичайними повідомленнями перед питанням.
+    msg["editor"] — заголовок редактора: якщо редактор на сервері є, замість preview — кнопка «✏️ Відкрити редактор»
+    (Mini App з цим текстом); збережений там текст іде відповіддю {"text"}."""
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
-    for part in split_text(msg.get("preview") or ""):
-        await ctx.bot.send_message(chat_id, part, disable_web_page_preview=True)
+    token, editor_url = (None, None)
+    if msg.get("editor") and msg.get("allow_text"):
+        token, editor_url = await open_editor(msg.get("preview") or "", str(msg["editor"])[:120])
+    if not editor_url:
+        for part in split_text(msg.get("preview") or ""):
+            await ctx.bot.send_message(chat_id, part, disable_web_page_preview=True)
     options = msg.get("options") or []
     rows, row = [], []
     for i, label in enumerate(options):
@@ -186,15 +274,30 @@ async def ask_user(ctx, chat_id, msg):
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton("⏭ Пропустити", callback_data="ans:skip")])
-    hint = "\n\n<i>Або напишіть відповідь повідомленням.</i>" if msg.get("allow_text") else ""
+    if editor_url:
+        rows.insert(0, [InlineKeyboardButton("✏️ Відкрити редактор", web_app=WebAppInfo(editor_url))])
+        hint = ("\n\n<i>Тисніть «✏️ Відкрити редактор» — там уже поточний текст: виправте й натисніть «Зберегти». "
+                "Або надішліть новий текст повідомленням.</i>")
+    elif msg.get("allow_text") and msg.get("preview"):
+        hint = "\n\n<i>Поточний текст — у повідомленні вище: скопіюйте, виправте й надішліть сюди.</i>"
+    else:
+        hint = "\n\n<i>Або напишіть відповідь повідомленням.</i>" if msg.get("allow_text") else ""
     sent = await ctx.bot.send_message(chat_id, f"❓ {esc(cut(msg.get('text'), 3000))}{hint}",
                                       parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
     ctx.application.bot_data["pending_ask"] = {"future": fut, "options": options, "secret": msg.get("secret"),
                                                "allow_text": msg.get("allow_text"), "message": sent}
+    watcher = asyncio.create_task(watch_editor(token, fut, sent)) if token else None
     try:
         return await fut
     finally:
         ctx.application.bot_data.pop("pending_ask", None)
+        if watcher:
+            watcher.cancel()
+            for p in _edit_files(token):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
 
 async def run_board(ctx, chat_id, board_key, argv, quiet=False, sent=None):

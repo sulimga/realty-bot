@@ -5,7 +5,8 @@
 #
 # Що робить:
 #   1. Визначає публічну IP і складає адресу  <ip-з-дефісами>.sslip.io  (безкоштовний DNS з реальним HTTPS-сертифікатом).
-#   2. Ставить Caddy (сам отримує і оновлює сертифікат Let's Encrypt) — назовні лише /olx/callback і /olx/health.
+#   2. Ставить Caddy (сам отримує і оновлює сертифікат Let's Encrypt) — назовні лише /olx/callback, /olx/health
+#      і /edit/* (редактор тексту для бота — Telegram Mini App, з 10.11.2026).
 #   3. Запускає сервіс realty-callback (common/oauth_callback.py, слухає тільки 127.0.0.1:8099).
 #   4. Відкриває порти 80/443 у локальному фаєрволі (iptables / ufw).
 #   5. Пише /var/lib/realty-oauth/host.txt (адреса для слотів) і каталог обміну кодами.
@@ -44,7 +45,7 @@ fi
 cat > /etc/caddy/Caddyfile <<EOF
 $HOST {
 	encode gzip
-	@cb path /olx/callback /olx/health
+	@cb path /olx/callback /olx/health /edit/*
 	handle @cb {
 		reverse_proxy 127.0.0.1:$PORT
 	}
@@ -66,7 +67,7 @@ chmod 644 "$SPOOL/host.txt"
 PY="$SRC/.venv/bin/python"; [ -x "$PY" ] || PY="$(command -v python3)"
 cat > /etc/systemd/system/realty-callback.service <<EOF
 [Unit]
-Description=Realty bot: OAuth callback (OLX)
+Description=Realty bot: OAuth callback (OLX) + text editor
 After=network-online.target
 
 [Service]
@@ -120,6 +121,9 @@ if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/olx/healt
   exit 1
 fi
 echo "✅ Локальний сервіс працює."
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/edit/health")" = 200 ]; then
+  echo "✅ Редактор тексту для бота: https://$HOST/edit/…"
+fi
 OK=0
 for i in 1 2 3 4 5 6; do   # сертифікат видається за 10–40 с після відкриття портів
   if [ "$(curl -s -m 10 -o /dev/null -w '%{http_code}' "https://$HOST/olx/health" || true)" = 200 ]; then OK=1; break; fi
