@@ -44,12 +44,18 @@ def wrap(text, font, size, width):
                 continue
             if cur:
                 lines.append(cur)
-            while font.text_length(word, fontsize=size) > width and len(word) > 1:
-                k = len(word) - 1
-                while k > 1 and font.text_length(word[:k], fontsize=size) > width:
-                    k -= 1
-                lines.append(word[:k])
-                word = word[k:]
+            if font.text_length(word, fontsize=size) > width:
+                # «слово» без пробілів (буває на тисячі символів): ширина кожного символу — один раз
+                cache, acc, start = {}, 0.0, 0
+                for i, ch in enumerate(word):
+                    w = cache.get(ch)
+                    if w is None:
+                        w = cache[ch] = font.text_length(ch, fontsize=size)
+                    if acc + w > width and i > start:
+                        lines.append(word[start:i])
+                        start, acc = i, 0.0
+                    acc += w
+                word = word[start:]
             cur = word
         lines.append(cur)
     return lines
