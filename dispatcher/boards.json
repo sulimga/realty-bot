@@ -27,5 +27,14 @@
     "login_cmd": [
       "login"
     ]
+  },
+  "presentation": {
+    "title": "Презентація з OLX",
+    "dir": "boards/presentation",
+    "entry": "run.py",
+    "enabled": true,
+    "kind": "tool",
+    "needs_techpassport": false,
+    "timeout_min": 15
   }
 }

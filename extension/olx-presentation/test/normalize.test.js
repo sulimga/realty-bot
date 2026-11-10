@@ -12,7 +12,7 @@ const API_FLAT = {
   url: "https://www.olx.ua/d/uk/obyavlenie/x-IDabc12.html", id: "900000001", notes: [],
   api: {
     id: 900000001, title: "Продам 3к квартиру!!!",
-    description: "Гарна квартира<br />\nТелефон: +38 (067) 123-45-67<br /><br />Пишіть @owner_kyiv або https://t.me/x<br />Ціна 95 000 $, 2001-2010 р.",
+    description: "Гарна квартира<br />\nТелефон: +38 (000) 000-00-00<br /><br />Пишіть @owner_kyiv або https://t.me/x<br />Ціна 95 000 $, 2001-2010 р.",
     category: { id: 1758, type: "real_estate" },
     location: { city: { id: 268, name: "Київ" }, district: { id: 15, name: "Печерський" }, region: { id: 25, name: "Київська область" } },
     params: [
@@ -60,7 +60,7 @@ t("службові параметри OLX не потрапляють, емод
 
 t("опис: без телефонів, посилань і @нікнеймів; роки й ціни лишаються", () => {
   const m = normalizeOlx(API_FLAT);
-  assert.ok(!/067|t\.me|@owner/.test(m.description), m.description);
+  assert.ok(!/000-00-00|t\.me|@owner/.test(m.description), m.description);
   assert.ok(/95 000 \$/.test(m.description) && /2001-2010/.test(m.description), m.description);
   assert.ok(!/Телефон/.test(m.description), m.description);
   assert.ok(/<br/.test(m.descriptionOriginal) === false);
@@ -75,7 +75,7 @@ t("фото: розмір з шаблону, без :443, без дублів", 
 });
 
 t("телефони в різних записах", () => {
-  for (const s of ["0671234567", "067 123 45 67", "+380671234567", "+38 (067) 123-45-67", "(067)123-45-67", "38 067 123 45 67"]) {
+  for (const s of ["0000000000", "000 000 00 00", "+380000000000", "+38 (000) 000-00-00", "(000)000-00-00", "38 000 000 00 00"]) {
     assert.equal(stripContacts("Дзвоніть " + s + " зранку").replace(/\s+/g, " "), "Дзвоніть зранку", s);
   }
   for (const s of ["1 050 000 грн", "кадастр 3220882200:03:005:1306", "площа 0,85 га", "2001-2010"]) {
@@ -84,7 +84,7 @@ t("телефони в різних записах", () => {
 });
 
 t("опис: залишки контактів і переноси <br>", () => {
-  const m = normalizeOlx({ api: { description: "Рядок 1<br />\nРядок 2<br /><br />Телефонуйте: 067 123 45 67 (Viber)<br />Пишіть у Telegram @owner_kyiv<br />На 5 поверсі є ліфт.<br />Телевізор залишається." } });
+  const m = normalizeOlx({ api: { description: "Рядок 1<br />\nРядок 2<br /><br />Телефонуйте: 000 000 00 00 (Viber)<br />Пишіть у Telegram @owner_kyiv<br />На 5 поверсі є ліфт.<br />Телевізор залишається." } });
   assert.equal(m.description, "Рядок 1\nРядок 2\n\nНа 5 поверсі є ліфт.\nТелевізор залишається.");
 });
 

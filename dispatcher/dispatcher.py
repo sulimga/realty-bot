@@ -71,9 +71,13 @@ def cancel_all():
 
 
 def boards(enabled_only=True):
+    """enabled_only=True — сайти для публікації (меню, «Вхід», статус); інструменти ("kind": "tool",
+    напр. презентація з OLX) сюди не входять. enabled_only=False — усе з реєстру (для запуску)."""
     with open(REGISTRY, encoding="utf-8") as f:
         reg = json.load(f)
-    return {k: v for k, v in reg.items() if v.get("enabled") or not enabled_only}
+    if not enabled_only:
+        return reg
+    return {k: v for k, v in reg.items() if v.get("enabled") and v.get("kind") != "tool"}
 
 
 def journal(entry):
