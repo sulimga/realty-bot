@@ -30,7 +30,14 @@ HEADERS = {
 
 
 def fetch_estate_data(url: str, timeout: int = 15) -> dict:
-    """Завантажує презентацію за посиланням і повертає розібрані дані."""
+    """Завантажує презентацію за посиланням і повертає розібрані дані.
+    Посилання LigaPro (*.ligapro.ua) розбирає extract_ligapro.py — у тому ж форматі."""
+    try:
+        from extract_ligapro import is_ligapro_url, fetch_ligapro_data
+    except ImportError:          # запуск не з теки crm/
+        from crm.extract_ligapro import is_ligapro_url, fetch_ligapro_data
+    if is_ligapro_url(url):
+        return fetch_ligapro_data(url, timeout=timeout)
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
     data = extract_estate_data(response.text)
