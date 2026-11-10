@@ -52,8 +52,19 @@ BTN_POST = "📤 Викласти оголошення"
 BTN_LOGIN = "🔑 Вхід"                      # до 10.11.2026 — «🔑 Вхід»
 BTN_REFRESH = "🔄 Оновити дати rieltor"
 BTN_DELETE = "🗑 Видалити оголошення rieltor"
-BTN_PRES = "📄 Презентація з OLX"           # програма boards/presentation (Telegraph + PDF для клієнта)
+BTN_PRES = "📄 Презентація"                 # програма boards/presentation (Telegraph + PDF для клієнта)
+BTN_PRES_OLD = ("📄 Презентація з OLX",)     # стара назва — на клавіатурах, надісланих до 10.11.2026
 OLX_AD_RE = re.compile(r"https?://(?:www\.|m\.)?olx\.ua/\S*obyavlenie/\S+", re.I)
+DOMRIA_AD_RE = re.compile(r"https?://(?:www\.)?dom\.ria\.com/(?:[a-z]{2}/)?realty-\S*?-\d{5,}\.html\S*", re.I)
+
+
+def ad_link(text, anywhere=False):
+    """Посилання на оголошення OLX / dom.ria для презентації (на початку повідомлення або будь-де)."""
+    for rx in (OLX_AD_RE, DOMRIA_AD_RE):
+        m = rx.search(text) if anywhere else rx.match(text)
+        if m:
+            return m.group(0)
+    return None
 # 10.11.2026: прибрано кнопки «📎 Техпаспорт до чернетки» і «ℹ️ Статус» (статус — команда /status).
 # Код сценарію техпаспорта до чернетки (start_tp, await_tp_id, tpid:) лишився — щоб повернути, додати кнопку.
 _ROW_REFRESH = [KeyboardButton(BTN_REFRESH)] + ([KeyboardButton(BTN_DELETE)] if not INSTANCE else [])  # видалення — лише в головному боті
@@ -371,8 +382,8 @@ async def start_presentation(update, ctx):
         return await update.message.reply_text("Зачекайте, іде інша дія.")
     reset(ctx)
     st(ctx)["mode"] = "await_pres_url"
-    await update.message.reply_text("Надішліть посилання на оголошення OLX — зроблю презентацію для клієнта: "
-                                    "сторінку Telegraph і PDF. Скасувати — /cancel")
+    await update.message.reply_text("Надішліть посилання на оголошення OLX або dom.ria — зроблю презентацію для "
+                                    "клієнта: сторінку Telegraph і PDF. Скасувати — /cancel", reply_markup=MENU)
 
 
 async def make_presentation(ctx, chat_id, url):
@@ -1129,7 +1140,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if ctx.application.bot_data.get("busy"):
             return await update.message.reply_text("Зачекайте, іде інша дія.")
         return await run_board(ctx, update.effective_chat.id, "rieltor", ["delete"])
-    if text == BTN_PRES:
+    if text == BTN_PRES or text in BTN_PRES_OLD:
         return await start_presentation(update, ctx)
 
     if pa and not pa["future"].done():
@@ -1147,11 +1158,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     mode = s.get("mode")
     if mode == "await_pres_url":
-        m = OLX_AD_RE.search(text)
-        if not m:
-            return await update.message.reply_text("Це не схоже на посилання на оголошення OLX "
-                                                   "(має бути olx.ua/…/obyavlenie/…). Надішліть ще раз або /cancel.")
-        return await make_presentation(ctx, update.effective_chat.id, m.group(0))
+        link = ad_link(text, anywhere=True)
+        if not link:
+            return await update.message.reply_text("Це не схоже на посилання на оголошення OLX або dom.ria "
+                                                   "(olx.ua/…/obyavlenie/… або dom.ria.com/…/realty-…-ID.html). "
+                                                   "Надішліть ще раз або /cancel.")
+        return await make_presentation(ctx, update.effective_chat.id, link)
     if mode == "await_urls_batch":
         return await got_urls_batch(update.effective_chat.id, ctx, extract_urls(text))
     if mode == "await_url":
@@ -1186,8 +1198,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mode == "nb_owner":
         return await nb_got_owner(update, ctx, text)
 
-    if OLX_AD_RE.match(text):              # кинули посилання на оголошення OLX — презентація
-        return await make_presentation(ctx, update.effective_chat.id, OLX_AD_RE.match(text).group(0))
+    if ad_link(text):                      # кинули посилання на оголошення OLX / dom.ria — презентація
+        return await make_presentation(ctx, update.effective_chat.id, ad_link(text))
     if re.match(r"https?://", text):       # просто кинули посилання — одразу починаємо
         reset(ctx)
         st(ctx)["mode"] = "await_url"

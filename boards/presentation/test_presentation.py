@@ -246,4 +246,102 @@ def _():
         assert doc.metadata["title"].startswith("Продаж / Квартира")
 
 
+
+# ---------------------------------------------------------------- dom.ria
+from normalize_domria import normalize_domria  # noqa: E402
+from domria_source import ad_id as dr_id, is_ad_url as dr_is_ad, parse_page as dr_parse, uk_url  # noqa: E402
+
+DR_URL = "https://dom.ria.com/uk/realty-prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa-35131292.html"
+DR_REALTY = {
+    "realty_id": 35131292, "realty_type_id": 2, "realty_type_name_uk": "квартира", "advert_type_id": 1,
+    "advert_type_name_uk": "продаж", "price": 240000, "currency_type_id": 1, "currency_type_uk": "$",
+    "priceArr": {"1": "240 000", "2": "205 000", "3": "11 052 000"},
+    "total_square_meters": 74.7, "living_square_meters": 34.1, "kitchen_square_meters": 19.1,
+    "rooms_count": 2, "floor": 22, "floors_count": 23,
+    "state_name_uk": "Київська", "city_name_uk": "Київ", "district_name_uk": "Шевченківський",
+    "street_name_uk": "Глибочицька вулиця", "building_number_str": "73", "user_newbuild_name_uk": "Podil Plaza",
+    "description_uk": "Видова 2-кімнатна квартира з хамамом.<br>Телефонуйте: 000 000 00 00",
+    "characteristics_values": {"118": 108, "209": 2, "214": 74.7, "216": 34.1, "218": 19.1, "227": 22, "228": 23,
+                               "234": 240000, "242": 239, "443": 435, "505": 3.2, "516": 506, "1437": 1436,
+                               "2014": "0", "99999": 5},
+    "photos": {"348220824": {"file": "dom/photo/34822/3482208/348220824/348220824.jpg", "ordering": 2},
+               "348220822": {"file": "dom/photo/34822/3482208/348220822/348220822.jpg", "ordering": 1}},
+    "user_id": 777, "user": {"name": "Продавець", "phone": "000"}, "agency_id": 5,
+}
+DR_PAGE = """<html><head><title>DIM.RIA</title><meta property="og:image" content="https://cdn.riastatic.com/photosnew/dom/photo/x__1xl.jpg">
+<script type="application/ld+json">{"@type":"Apartment","address":{"streetAddress":"Глибочицька вулиця, 73","addressLocality":"Київ"},
+"floorSize":{"value":74.7},"numberOfRooms":2,"offers":{"price":240000,"priceCurrency":"USD"},"description":"ld опис"}</script></head>
+<body><h1>Продаж 2к квартири 74.7 кв. м на вул. Глибочицька 73</h1>
+<img src="https://cdn.riastatic.com/photosnew/dom/photo/prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa__348220822xl.jpg">
+<img src="https://cdn.riastatic.com/photosnew/dom/photo/prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa__348220824xl.jpg">
+<img src="https://cdn.riastatic.com/photosnew/dom/photo/prodaja-dom-irpen-tsentr__399999999xl.jpg">
+<script>window.__INITIAL_STATE__ = @@STATE@@;</script></body></html>"""
+
+
+@t("dom.ria: посилання, ID, українська сторінка")
+def _():
+    assert dr_is_ad(DR_URL) and dr_id(DR_URL) == "35131292"
+    ru = DR_URL.replace("/uk/", "/ru/") + "?utm=x"
+    assert dr_is_ad(ru) and uk_url(ru) == DR_URL
+    assert uk_url(DR_URL.replace("/uk/", "/")) == DR_URL
+    assert not dr_is_ad("https://dom.ria.com/prodazha-kvartir/kiev/") and not dr_is_ad(API_FLAT["url"])
+
+
+@t("dom.ria: квартира з JSON — тип, адреса з вулицею, площі, ЖК, характеристики з довідника, ціна за м²")
+def _():
+    raw = {"url": DR_URL, "id": "35131292", "api": DR_REALTY, "dom": {"slug": "prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa", "photos": []}}
+    m = normalize_domria(raw)
+    assert m["kicker"] == "Продаж / Квартира", m["kicker"]
+    assert row(m, "address") == "Київ, Шевченківський район, Глибочицька вулиця, 73", row(m, "address")
+    assert row(m, "purpose") == "Житлова" and row(m, "zk") == "Podil Plaza"
+    assert (row(m, "total_area"), row(m, "living_area"), row(m, "kitchen_area")) == ("74.7 м²", "34.1 м²", "19.1 м²")
+    assert (row(m, "rooms"), row(m, "floor"), row(m, "total_floors"), row(m, "walls")) == ("2", "22", "23", "цегла")
+    labels = {r["label"]: r["value"] for r in m["rows"]}
+    assert labels.get("Рік побудови") == "1990-2000" and labels.get("Стан ремонту") == "дизайнерський ремонт", labels
+    assert labels.get("Висота стелі") == "3.2", labels
+    assert not any(k in labels for k in ("Тип пропозиції", "Комісія", "Ціна")), labels
+    assert m["price"]["text"] == "240 000 $" and unit_price(m) == "3 213 $/м²", (m["price"], unit_price(m))
+    assert quick_facts(m["rows"]) == ["74.7 м²", "2 кімн.", "22/23 пов."], quick_facts(m["rows"])
+    assert m["description"] == "Видова 2-кімнатна квартира з хамамом.", repr(m["description"])
+    assert m["photos"] == ["https://cdn.riastatic.com/photosnew/dom/photo/prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa__348220822xl.jpg",
+                           "https://cdn.riastatic.com/photosnew/dom/photo/prodaja-kvartira-kiev-shevchenkovskiy-glubochitskaya-ulitsa__348220824xl.jpg"]
+
+
+@t("dom.ria: сторінка з вбудованим JSON — знаходить оголошення, фото лише свої, без даних продавця")
+def _():
+    from domria_source import strip_private
+    page = DR_PAGE.replace("@@STATE@@", json.dumps({"page": {"realty": DR_REALTY, "similar": [{"realty_id": 1, "x": 2}]}}, ensure_ascii=False))
+    res = dr_parse(page, DR_URL, "35131292")
+    assert res["embedded"] and res["embedded"]["realty_id"] == 35131292
+    assert [p["id"] for p in res["dom"]["photos"]] == ["348220822", "348220824"], res["dom"]["photos"]
+    emb = strip_private(res["embedded"])
+    assert not any(k in emb for k in ("user_id", "user", "agency_id")), list(emb)
+    m = normalize_domria({"url": DR_URL, "id": "35131292", "embedded": emb, **{k: v for k, v in res.items() if k != "embedded"}})
+    assert m["kicker"] == "Продаж / Квартира" and len(m["photos"]) == 2
+
+
+@t("dom.ria: без JSON — запасне з JSON-LD і розмітки (і примітка)")
+def _():
+    res = dr_parse(DR_PAGE.replace("@@STATE@@", "null"), DR_URL, "35131292")
+    assert res["embedded"] is None
+    m = normalize_domria({"url": DR_URL, "id": "35131292", **res})
+    assert m["kicker"] == "Продаж / Квартира", m["kicker"]
+    assert row(m, "address") == "Київ, Глибочицька вулиця, 73" and row(m, "total_area") == "74.7 м²", m["rows"]
+    assert m["price"]["text"] == "240 000 $" and len(m["photos"]) == 2 and m["description"] == "ld опис"
+    assert any("JSON оголошення не знайдено" in n for n in m["notes"])
+
+
+@t("dom.ria: ділянка (цільове призначення, сотки, ціна за сотку) і оренда квартири (/ міс.)")
+def _():
+    land = normalize_domria({"api": {"realty_id": 1, "realty_type_id": 25, "advert_type_id": 1, "price": 30000, "currency_type_id": 1,
+                                     "city_name_uk": "Лісники", "state_name_uk": "Київська",
+                                     "characteristics_values": {"2099": 2083, "1917": 15, "226": 223, "1663": "3220882200:03:005:1306"}}})
+    assert land["kicker"] == "Продаж / Ділянка під житлову забудову", land["kicker"]
+    assert row(land, "purpose") == "під житлову забудову" and row(land, "land_area") == "15 сот."
+    assert row(land, "address") == "Лісники, Київська обл."
+    assert unit_price(land) == "2 000 $/сот." and any(r["label"] == "Кадастровий номер" for r in land["rows"])
+    rent = normalize_domria({"api": {"realty_id": 2, "realty_type_id": 2, "advert_type_id": 3, "price": 25000, "currency_type_id": 3,
+                                     "city_name_uk": "Київ", "total_square_meters": 50}})
+    assert rent["kicker"] == "Оренда / Квартира" and rent["price"]["text"] == "25 000 грн / міс."
+
 print(f"\nУсього тестів: {N}, усі пройшли.")

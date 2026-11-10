@@ -29,7 +29,7 @@
     ]
   },
   "presentation": {
-    "title": "Презентація з OLX",
+    "title": "Презентація (OLX, dom.ria)",
     "dir": "boards/presentation",
     "entry": "run.py",
     "enabled": true,

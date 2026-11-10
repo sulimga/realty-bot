@@ -1,9 +1,10 @@
 """
 Презентація для клієнта з оголошення OLX — точка входу для диспетчера (протокол: common/board_protocol.py).
 
-    python run.py make --url <посилання на оголошення OLX> [--no-ask]
+    python run.py make --url <посилання на оголошення OLX або dom.ria> [--no-ask]
 
-Що робить: читає оголошення (olx_source.py), складає презентацію як у CRM (normalize.py), питає в боті
+Що робить: читає оголошення (olx_source.py / domria_source.py), складає презентацію як у CRM
+(normalize.py / normalize_domria.py — одна модель), питає в боті
 ціну й підпис ріелтора, публікує сторінку на telegra.ph (telegraph.py) і збирає PDF (render_pdf.py).
 Результат: {"url": посилання Telegraph, "files": [{"path", "name"}]} — бот надсилає PDF документом.
 Це не «дошка» для публікації: у boards.json має "kind": "tool" (не видно у виборі сайтів і в «Вхід»).
@@ -31,7 +32,9 @@ bp.install_print_hook()
 
 from normalize import (CUR_SYMBOL, fmt_num, normalize_olx, parse_price, presentation_title,  # noqa: E402
                        tidy_text, unit_price)
+import domria_source  # noqa: E402
 import olx_source  # noqa: E402
+from normalize_domria import normalize_domria  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 DIR = os.path.join(DATA, "presentation")
@@ -109,7 +112,7 @@ def edit_description(model, orig):
     cur = model["description"]
     kind, v = bp.ask_choice(
         "Опис оголошення: новий текст повністю замінить поточний." + ("" if cur.strip() else " (Зараз опису немає.)"),
-        [("orig", "↩️ Як на OLX"), ("none", "🗑 Без опису")], allow_text=True,
+        [("orig", f"↩️ Як на {model.get('source') or 'сайті'}"), ("none", "🗑 Без опису")], allow_text=True,
         preview=cur, editor="Опис оголошення")
     if kind == "text" and v.strip():
         model["description"] = tidy_text(v)
@@ -159,16 +162,24 @@ def file_name(model):
 
 def cmd_make(a):
     url = (a.url or "").strip()
-    if not olx_source.is_ad_url(url):
-        return bp.result(False, "Це не посилання на оголошення OLX. Потрібне посилання виду "
-                                "https://www.olx.ua/d/uk/obyavlenie/…-ID….html")
-    bp.info("Читаю оголошення OLX…")
-    session = olx_source.new_session()
+    if olx_source.is_ad_url(url):
+        site, session = "OLX", olx_source.new_session()
+    elif domria_source.is_ad_url(url):
+        site, session = "dom.ria", domria_source.new_session()
+    else:
+        return bp.result(False, "Це не посилання на оголошення OLX чи dom.ria. Потрібне посилання виду\n"
+                                "https://www.olx.ua/d/uk/obyavlenie/…-ID….html або\n"
+                                "https://dom.ria.com/uk/realty-…-12345678.html")
+    bp.info(f"Читаю оголошення {site}…")
+    html = None
     try:
-        raw = olx_source.fetch(url, session, log=bp.info)
+        if site == "OLX":
+            raw = olx_source.fetch(url, session, log=bp.info)
+        else:
+            raw, html = domria_source.fetch(url, session, data_dir=DATA, log=bp.info)
     except Exception as e:  # noqa: BLE001
         return bp.result(False, f"Не вдалося прочитати оголошення: {e}")
-    model = normalize_olx(raw)
+    model = normalize_olx(raw) if site == "OLX" else normalize_domria(raw)
 
     ts = time.strftime("%Y%m%d-%H%M%S")
     sid = str(model.get("source_id") or "page")
@@ -176,11 +187,20 @@ def cmd_make(a):
     run_path = os.path.join(DIR, "runs", f"{ts}_{sid}.json")
     with open(run_path, "w", encoding="utf-8") as f:
         json.dump({"raw": raw, "model": model}, f, ensure_ascii=False, indent=1)
+    diag = [{"path": run_path, "name": f"діагностика_{sid}.json"}]
+    if html:
+        with open(run_path[:-5] + ".html", "w", encoding="utf-8") as f:
+            f.write(html)
+        diag.append({"path": run_path[:-5] + ".html", "name": f"сторінка_{sid}.html"})
     prune(os.path.join(DIR, "runs", "*.json"), 50)
+    prune(os.path.join(DIR, "runs", "*.html"), 20)
 
     if len(model["rows"]) < 3 or not (model["photos"] or model["description"]):
-        return bp.result(False, "OLX віддав замало даних (схоже, змінилась сторінка). Нічого не створено.\n"
-                                f"Дані для діагностики: {run_path}" + (f"\nДеталі: {'; '.join(model['notes'])}" if model["notes"] else ""))
+        return bp.result(False, f"{site} віддав замало даних — нічого не створено. Схоже, сайт змінив сторінку.\n"
+                                "Надішліть файли нижче Claude — підлаштуємо зчитування."
+                                + (f"\nДеталі: {'; '.join(model['notes'])}" if model["notes"] else ""), files=diag)
+    if model["notes"]:
+        bp.info("Примітки: " + "; ".join(model["notes"]))
 
     cfg = load_config()
     agent = cfg.get("agent")
