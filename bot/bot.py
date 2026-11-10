@@ -49,7 +49,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
 BTN_POST = "📤 Викласти оголошення"
-BTN_LOGIN = "🔑 Вхід"                      # до 10.11.2026 — «🔑 Вхід»
+BTN_LOGIN = "🔑 Вхід"                      # до 10.11.2026 — «🍪 Cookies»
 BTN_REFRESH = "🔄 Оновити дати rieltor"
 BTN_DELETE = "🗑 Видалити оголошення rieltor"
 BTN_PRES = "📄 Презентація"                 # програма boards/presentation (Telegraph + PDF для клієнта)
