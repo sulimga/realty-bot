@@ -394,9 +394,9 @@ URL-патерн і інший cookie, ніж публічна презента�
 - Кнопка бота «📄 Презентація з OLX» (realty-bot, тестовий): Telegraph + PDF (10.11.2026, розділ 8а). Перенесено в мультибот того ж дня (коміт 3412e50).
 - Презентація: «📝 Змінити опис» + у протоколі `preview` і збирання довгої відповіді з частин (10.11.2026, лише realty-bot).
 - Презентація з dom.ria (кнопка «📄 Презентація», кинуте посилання dom.ria); файли діагностики в чат, коли даних замало
-  (10.11.2026, лише realty-bot).
+  (10.11.2026; у мультибот перенесено того ж дня, коміт 08d7df6).
 - Редактор тексту в Telegram (Mini App) для опису: `editor` у протоколі, сторінка `/edit/<token>` у службі realty-callback,
-  Caddy `/edit/*` (10.11.2026, лише realty-bot; на сервері — після `/update` і `/callback`).
+  Caddy `/edit/*` (10.11.2026; перенесено в мультибот, коміт 08d7df6; на сервері — після `/update` і `/callback`).
   ⚠️ Для мультибота переносити РАЗОМ: `boards/presentation/run.py`, `common/board_protocol.py` (preview) і в `bot/bot.py` —
   `split_text`, `collect_long_answer`, показ preview в `ask_user` (там `pending_ask` у `ctx.user_data`). Без нового протоколу
   нова run.py впаде на `preview=`.
