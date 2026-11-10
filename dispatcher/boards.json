@@ -26,6 +26,9 @@
     "keepalive_h": 12,
     "login_cmd": [
       "login"
+    ],
+    "api_login_cmd": [
+      "api-login"
     ]
   },
   "presentation": {

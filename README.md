@@ -67,5 +67,5 @@ dom.ria можна запускати й старим способом: `python 
 
 ## Команди бота
 Кнопки меню: «Викласти оголошення», «Вхід», «Презентація» (OLX, dom.ria), «Оновити дати rieltor», «Видалити оголошення rieltor» (лише головний бот).
-Команди: `/cancel`, `/update`, `/logs`, `/status`, `/id`; лише в головному боті — `/newbot`, `/bots`, `/delbot` (слоти), `/callback` (приймальна HTTPS-адреса для OAuth OLX, deploy/setup-callback.sh).
+Команди: `/cancel`, `/update`, `/logs`, `/status`, `/id`; лише в головному боті — `/newbot`, `/bots`, `/delbot` (слоти), `/callback` (приймальна HTTPS-адреса для OAuth OLX, deploy/setup-callback.sh), `/olxapp` (client_id/secret програми OLX), `/olxprobe` (розвідка офіційного API).
 Першим, хто надішле боту `/start`, стає власник — далі бот відповідає тільки йому.

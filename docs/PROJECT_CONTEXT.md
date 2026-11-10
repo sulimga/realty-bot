@@ -438,6 +438,23 @@ URL-патерн і інший cookie, ніж публічна презента�
      сервері, не в git), зберігає access (~24 год) і refresh (~1 міс, ротується) у своїх secrets.
    - Реєстрація програми: developer.olx.ua → «Додати додаток» (назва RealtyPosterBot, URI зворотного виклику
      `https://<IP-з-дефісами>.sslip.io/olx/callback`, опис; scope `v2 read write`) → перевірка OLX («Waiting for acceptance»), лист на пошту.
+   **10.11.2026: OLX схвалив програму RealtyPosterBot** (лист developer.olx.ua «Запит схвалено»). Зроблено вхід через офіційний API:
+   `boards/olx/olx_official.py` (authorize `https://www.olx.ua/oauth/authorize/`, токен `POST https://www.olx.ua/api/open/oauth/token`
+   JSON, API `https://www.olx.ua/api/partner/…` із заголовками `Authorization: Bearer`, `Version: 2.0`, Content-Type лише на POST/PUT;
+   scope `v2 read write`; access ≈24 год, refresh ≈1 міс — ротується; токени користувача `<DATA>/secrets/olx_api.json`, замок `.lock`),
+   `run.py api-login` (посилання → «Дозволити» → приймальна адреса → програма сама забирає код за sha256(state) з
+   `/var/lib/realty-oauth/` і міняє на токени), `run.py api-probe` (лише GET: users/me, categories, attributes, adverts, кілька
+   вгаданих шляхів; усе — одним JSON-файлом у чат, email/телефон замасковано), `keepalive` оновлює офіційний доступ раз на 12 год.
+   Дані програми (client_id/client_secret) — спільні для всіх користувачів: `/var/lib/realty-oauth/olx_app.json` (0600), вносить адмін
+   командою `/olxapp` (повідомлення видаляються). Кнопка «✅ Підключити OLX (кнопка «Дозволити»)» у меню «🔑 Вхід» (boards.json →
+   `api_login_cmd`); адмін: `/olxprobe`. Адреси API звірені з документацією OLX PL і чужою робочою інтеграцією, на живому olx.ua — ще ні.
+   Відомо з документації: фото в офіційному API передаються ПОСИЛАННЯМИ (`images:[{url}]`), OLX сам їх завантажує (потрібні публічні
+   адреси — напр. фото CRM або тимчасові файли на нашій HTTPS-адресі); заголовок 16–150, опис 80–9000 (≤50% великих літер, без
+   посилань/email/телефонів); `price {value,currency,negotiable}`; `location {city_id,district_id,latitude,longitude}`; `attributes
+   [{code,value|values}]`; категорія має бути листовою; нові оголошення — `new` (модерація) або `limited` (потрібен пакет).
+   ⚠️ Для МУЛЬТИБОТА переносити разом: `boards/olx/olx_official.py`, зміни `boards/olx/run.py`, `dispatcher/boards.json` (`api_login_cmd`)
+   і в `bot/bot.py` — `/olxapp`, `/olxprobe`, режими `oa_id`/`oa_secret`, `lg2:` і кнопку в `ck:`.
+   Далі: підключити акаунт → `/olxprobe` → по файлу з відповідями писати публікацію (категорії, атрибути, локація, фото-посилання).
    ⚠️ Ще НЕ зроблено: публікація через офіційний API. Теперішня програма постить через внутрішній API сайту
    (posting-services…), токен офіційного OAuth для нього, найімовірніше, не підійде — потрібен окремий клієнт офіційного API
    (інша модель даних оголошення). Спершу — `probe` на реальному токені (користувач, категорії нерухомості й атрибути, пакети,

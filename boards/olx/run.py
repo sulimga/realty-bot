@@ -5,6 +5,8 @@ OLX — точка входу для диспетчера (протокол: com
     python run.py check
     python run.py login          # постійний вхід за посиланням (OAuth code + PKCE), без консолі й інкогніто
     python run.py keepalive      # оновити постійний вхід (бот викликає за розкладом, boards.json keepalive_h)
+    python run.py api-login      # офіційне підключення (OAuth «Дозволити»): посилання → OLX → наша приймальна адреса
+    python run.py api-probe      # перевірка офіційного API на живому токені (що повертає OLX) → JSON-файл у чат
 
 Вміє: будинки, квартири (продаж і довгострокова оренда), комерцію всіх типів (продаж і оренда).
 Категорії й обов'язкові поля — з categories.json (див. mapping.py).
@@ -41,6 +43,7 @@ bp.install_print_hook()
 import extract_estate_admin as ADM  # noqa: E402
 import mapping as M  # noqa: E402
 from olx_client import NET_ERRORS, AuthError, OlxClient, OlxError  # noqa: E402
+from olx_official import OfficialClient, OlxApiError  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
 ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")   # «🔑 Вхід» → CRM (адмінка…)
@@ -640,8 +643,125 @@ def cmd_login(a):
     raise OlxError("не вдалося увійти")
 
 
+def cmd_api_login(a):
+    """Офіційне підключення: користувач відкриває посилання, входить на сайті OLX і тисне «Дозволити»;
+    OLX веде на нашу приймальну адресу, програма сама забирає код і міняє його на токени."""
+    off = OfficialClient(DATA)
+    state = secrets.token_urlsafe(32)
+    url = off.authorize_url(state)
+    bp.info("✅ Підключення OLX (офіційне)\n\n"
+            "1) Відкрийте посилання й увійдіть у свій акаунт OLX — пароль вводите на сайті OLX, бот його не бачить:\n"
+            f"{url}\n\n"
+            "2) На сторінці OLX натисніть «Дозволити».\n"
+            "3) Повертайтесь у Telegram — бот побачить дозвіл сам (чекаю до 10 хв).")
+    bp.flush_info()
+    code = off.wait_code(state)
+    print("Дозвіл отримано, оформлюю доступ…")
+    off.exchange_code(code)
+    who = "?"
+    try:
+        st, body = off.get("/users/me")
+        d = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        if st == 200 and isinstance(d, dict):
+            who = d.get("name") or d.get("email") or d.get("id") or "?"
+        else:
+            print(f"/users/me → HTTP {st}: {str(body)[:200]}")
+    except (OlxApiError,) + NET_ERRORS as e:
+        print(f"/users/me не відповів: {e}")
+    bp.result(True, f"OLX: підключено офіційно ✅ ({who}). Токен діє ще {fmt_left(off.expires_in())}, далі бот оновлює його сам.")
+
+
+def _mask(x):
+    """Для файлу з пробою: ховаємо email/телефон (це дані акаунта, у чат їх не треба)."""
+    if isinstance(x, dict):
+        return {k: ("***" if k.lower() in ("email", "phone", "phone_number", "token", "access_token", "refresh_token")
+                    and isinstance(v, (str, int)) else _mask(v)) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_mask(v) for v in x]
+    return x
+
+
+def _brief(x, n=500):
+    t = json.dumps(x, ensure_ascii=False) if not isinstance(x, str) else x
+    return t if len(t) <= n else t[:n] + f"… (+{len(t) - n} симв.)"
+
+
+def _find_named(x, pat, out, depth=0):
+    """Усі словники, де в якомусь рядковому полі name/label є pat (для пошуку «Нерухомість» у дереві категорій)."""
+    if depth > 8:
+        return
+    if isinstance(x, dict):
+        names = [v for k, v in x.items() if k in ("name", "label", "title") and isinstance(v, str)]
+        if any(re.search(pat, n, re.I) for n in names) and "id" in x:
+            out.append({"id": x.get("id"), "name": names[0], "parent_id": x.get("parent_id")})
+        for v in x.values():
+            _find_named(v, pat, out, depth + 1)
+    elif isinstance(x, list):
+        for v in x:
+            _find_named(v, pat, out, depth + 1)
+
+
+def cmd_api_probe(a):
+    """Розвідка офіційного API на живому токені: нічого не створює й не змінює (лише GET).
+    Усі відповіді складає в один JSON-файл і надсилає в чат — по ньому пишемо публікацію через офіційний API."""
+    off = OfficialClient(DATA)
+    off.ensure_token()
+    report = {}
+
+    def call(path, params=None, show=True):
+        key = path + ("?" + "&".join(f"{k}={v}" for k, v in params.items()) if params else "")
+        try:
+            st, body = off.get(path, params)
+        except (OlxApiError,) + NET_ERRORS as e:
+            report[key] = {"error": f"{type(e).__name__}: {e}"}
+            print(f"GET {key} → помилка: {type(e).__name__}: {str(e)[:150]}")
+            return None, None
+        report[key] = {"status": st, "body": _mask(body)}
+        if show:
+            print(f"GET {key} → HTTP {st}: {_brief(_mask(body), 260)}")
+        return st, body
+
+    call("/users/me")
+    st, cats = call("/categories", show=False)
+    found = []
+    if st == 200:
+        _find_named(cats, r"нерухом|недвиж|real.?estate", found)
+        print(f"/categories → HTTP 200; категорій «нерухомість»: {len(found)}: {_brief(found[:5], 400)}")
+    else:
+        print(f"/categories → HTTP {st}: {_brief(_mask(cats), 300)}")
+    for f in found[:2]:
+        call("/categories", {"parent_id": f["id"]}, show=False)
+    ids = []
+    for cid in (1758, 1760, 1602, 330, 1612, 1614):       # ідентифікатори з сайту — перевіримо, чи збігаються з офіційними
+        st, body = call(f"/categories/{cid}/attributes", show=False)
+        ids.append(f"{cid}:{st}")
+    print("атрибути категорій (id з сайту): " + ", ".join(ids))
+    call("/adverts", {"limit": 3})
+    for p in ("/users/me/packets", "/users/me/thresholds", "/packets", "/thresholds", "/cities"):
+        call(p, show=False)
+    print("Інші шляхи (пакети/ліміти/міста): " + ", ".join(
+        f"{k} → {v.get('status', 'помилка')}" for k, v in report.items()
+        if k.startswith(("/users/me/", "/packets", "/thresholds", "/cities"))))
+    os.makedirs(BOARD_DIR, exist_ok=True)
+    path = os.path.join(BOARD_DIR, "api_probe.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
+    bp.result(True, "OLX API: розвідку виконано (лише читання). Файл із відповідями — нижче, перешліть його Claude.",
+              files=[{"path": path, "name": "olx_api_probe.json"}])
+
+
 def cmd_keepalive(a):
     """Оновлює постійний вхід (і заразом не дає йому «заснути»). Без refresh token — нічого не робить."""
+    off = OfficialClient(DATA)
+    if off.connected():
+        try:
+            off.refresh()
+        except (OlxApiError,) + NET_ERRORS as e:
+            bp.result(False, f"OLX: офіційний доступ не оновився ({str(e)[:200]}). Підключіть заново: 🔑 Вхід → OLX → "
+                             f"✅ Підключити (офіційно)")
+            return
+        bp.result(True, f"OLX: офіційний доступ оновлено, токен діє ще {fmt_left(off.expires_in())}")
+        return
     cfg = load_cfg()
     client = make_client(cfg, check_token=False)
     if not client.has_refresh():
@@ -694,6 +814,8 @@ def finish_error(e):
                          f"(там інструкція), або разово надішліть рядок Authorization (Bearer …)")
     elif isinstance(e, NET_ERRORS):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")
+    elif isinstance(e, OlxApiError):
+        bp.result(False, f"OLX (офіційний доступ): {e}")
     elif isinstance(e, (OlxError, SystemExit)):
         bp.result(False, f"OLX: {e}")
     else:
@@ -711,9 +833,12 @@ def main():
     sub.add_parser("check")
     sub.add_parser("keepalive")
     sub.add_parser("login")
+    sub.add_parser("api-login")
+    sub.add_parser("api-probe")
     a = ap.parse_args()
     try:
-        {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive, "login": cmd_login}[a.cmd](a)
+        {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive, "login": cmd_login,
+         "api-login": cmd_api_login, "api-probe": cmd_api_probe}[a.cmd](a)
     except BaseException as e:  # noqa: BLE001
         finish_error(e)
     finally:

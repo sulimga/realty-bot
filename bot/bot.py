@@ -835,7 +835,8 @@ async def start_cookies(update, ctx):
 
 
 def key_has_login(key):
-    return bool((D.boards().get(key) or {}).get("login_cmd"))
+    b = D.boards().get(key) or {}
+    return bool(b.get("login_cmd") or b.get("api_login_cmd"))
 
 
 async def save_cookie(update, ctx, board_key, text):
@@ -1074,6 +1075,69 @@ async def nb_go(chat_id, ctx):
                                else "❌ Слот не створено — причина в повідомленні вище.", reply_markup=MENU)
 
 
+OLXAPP_FILE = os.path.join(EDIT_SPOOL, "olx_app.json")      # спільні дані програми OLX (client_id/client_secret), НЕ в git
+
+
+async def cmd_olxapp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Дані програми OLX (developer.olx.ua) — один раз, для всіх користувачів бота. Повідомлення з ними видаляються."""
+    if not is_owner(update):
+        return
+    reset(ctx)
+    st(ctx)["mode"] = "oa_id"
+    await update.message.reply_text(
+        "🔐 Програма OLX (developer.olx.ua → твій додаток → Client ID і Client Secret).\n\n"
+        "Крок 1 з 2: надішли Client ID. Повідомлення я одразу видалю. Скасувати: /cancel")
+
+
+async def oa_got_id(update, ctx, text):
+    try:
+        await update.message.delete()
+    except BadRequest:
+        pass
+    cid = text.strip()
+    if not re.fullmatch(r"\S{4,200}", cid):
+        return await ctx.bot.send_message(update.effective_chat.id, "Не схоже на Client ID (без пробілів). Надішліть ще раз.")
+    s = st(ctx)
+    s["oa_id"], s["mode"] = cid, "oa_secret"
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "Крок 2 з 2: надішли Client Secret (повідомлення теж видалю).")
+
+
+async def oa_got_secret(update, ctx, text):
+    chat_id = update.effective_chat.id
+    try:
+        await update.message.delete()
+    except BadRequest:
+        pass
+    secret = text.strip()
+    if not re.fullmatch(r"\S{8,300}", secret):
+        return await ctx.bot.send_message(chat_id, "Не схоже на Client Secret (без пробілів). Надішліть ще раз.")
+    s = st(ctx)
+    cid = s.get("oa_id", "")
+    reset(ctx)                                  # секрет більше не тримаємо в пам'яті бота
+    try:
+        os.makedirs(EDIT_SPOOL, exist_ok=True)
+        tmp = OLXAPP_FILE + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"client_id": cid, "client_secret": secret}, f)
+        os.replace(tmp, OLXAPP_FILE)
+    except OSError as e:
+        return await ctx.bot.send_message(chat_id, f"❌ Не вдалося зберегти ({e}). Чи є каталог {EDIT_SPOOL}? Спершу /callback.")
+    await ctx.bot.send_message(
+        chat_id, "✅ Збережено на сервері (не в git). Тепер: «🔑 Вхід» → OLX → «✅ Підключити OLX (кнопка «Дозволити»)».",
+        reply_markup=MENU)
+
+
+async def cmd_olxprobe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Розвідка офіційного API OLX (лише читання): надсилає в чат JSON-файл із відповідями."""
+    if not is_owner(update):
+        return
+    if ctx.application.bot_data.get("busy"):
+        return await update.message.reply_text("Зачекайте, іде інша дія.")
+    await run_board(ctx, update.effective_chat.id, "olx", ["api-probe"])
+
+
 async def cmd_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Приймальна HTTPS-адреса для OAuth-повернення OLX (deploy/setup-callback.sh). Лише головний бот."""
     if not is_owner(update):
@@ -1184,6 +1248,10 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Надішліть номер оголошення dom.ria (тільки цифри).")
         s["tp_realty_id"] = text
         return await ask_techpassport(update.effective_chat.id, ctx)
+    if mode == "oa_id":
+        return await oa_got_id(update, ctx, text)
+    if mode == "oa_secret":
+        return await oa_got_secret(update, ctx, text)
     if mode == "nb_name":
         if TOKEN_RE.search(text):              # токен надіслали раніше часу — не залишаємо його в чаті
             try:
@@ -1403,6 +1471,17 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(None)
         return await db_go(chat_id, ctx, s["db_name"])
 
+    if data.startswith("lg2:"):                 # офіційне підключення «Дозволити» (boards.json → api_login_cmd)
+        key = data[4:]
+        reset(ctx)
+        await q.edit_message_reply_markup(None)
+        b = D.boards().get(key) or {}
+        if not b.get("api_login_cmd"):
+            return
+        if ctx.application.bot_data.get("busy"):
+            return await ctx.bot.send_message(chat_id, "Зачекайте, іде інша дія.")
+        return await run_board(ctx, chat_id, key, b["api_login_cmd"])
+
     if data.startswith("lg:"):                  # вхід за посиланням (boards.json → login_cmd)
         key = data[3:]
         reset(ctx)
@@ -1417,8 +1496,14 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data.startswith("ck:") and key_has_login(data[3:]):
         key = data[3:]
         await q.edit_message_reply_markup(None)
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Увійти за посиланням (просто)", callback_data=f"lg:{key}")],
-                                   [InlineKeyboardButton("🔑 Тимчасовий токен / cookie (вручну)", callback_data=f"ckm:{key}")]])
+        bd = D.boards()[key]
+        rows = []
+        if bd.get("api_login_cmd"):
+            rows.append([InlineKeyboardButton("✅ Підключити OLX (кнопка «Дозволити»)", callback_data=f"lg2:{key}")])
+        if bd.get("login_cmd"):
+            rows.append([InlineKeyboardButton("🔗 Увійти за посиланням (запасний)", callback_data=f"lg:{key}")])
+        rows.append([InlineKeyboardButton("🔑 Тимчасовий токен / cookie (вручну)", callback_data=f"ckm:{key}")])
+        kb = InlineKeyboardMarkup(rows)
         return await ctx.bot.send_message(chat_id, f"{D.boards()[key]['title']}: як дати боту вхід?", reply_markup=kb)
 
     if data.startswith("ck:") or data.startswith("ckm:"):
@@ -1503,6 +1588,8 @@ def main():
         app.add_handler(CommandHandler("bots", cmd_bots))
         app.add_handler(CommandHandler("delbot", cmd_delbot))
         app.add_handler(CommandHandler("callback", cmd_callback))
+        app.add_handler(CommandHandler("olxapp", cmd_olxapp))
+        app.add_handler(CommandHandler("olxprobe", cmd_olxprobe))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, on_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
