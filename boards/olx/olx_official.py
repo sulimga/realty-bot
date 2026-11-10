@@ -77,7 +77,7 @@ class OfficialClient:
     def app(self):
         d = _read_json(os.path.join(self.dir, "olx_app.json")) or {}
         if not d.get("client_id") or not d.get("client_secret"):
-            raise OlxApiError("програма OLX ще не налаштована на сервері (адмін: команда /olxapp)")
+            raise OlxApiError("програма OLX ще не налаштована на сервері — повідомте адміністратору бота (адмін: команда /olxapp)")
         return d["client_id"], d["client_secret"]
 
     def redirect_uri(self):
@@ -87,7 +87,7 @@ class OfficialClient:
         except OSError:
             host = ""
         if not host:
-            raise OlxApiError("приймальна адреса не налаштована на сервері (адмін: команда /callback)")
+            raise OlxApiError("приймальна адреса не налаштована на сервері — повідомте адміністратору бота (спільна адреса на тестовому боті: /callback)")
         return f"https://{host}/olx/callback"
 
     def authorize_url(self, state):
