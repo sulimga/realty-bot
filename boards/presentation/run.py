@@ -29,7 +29,8 @@ import board_protocol as bp  # noqa: E402
 
 bp.install_print_hook()
 
-from normalize import CUR_SYMBOL, fmt_num, normalize_olx, parse_price, presentation_title, unit_price  # noqa: E402
+from normalize import (CUR_SYMBOL, fmt_num, normalize_olx, parse_price, presentation_title,  # noqa: E402
+                       tidy_text, unit_price)
 import olx_source  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
@@ -94,18 +95,45 @@ def new_price(old_text, typed):
     return typed
 
 
+def desc_line(desc, orig):
+    if not desc.strip():
+        return "без опису"
+    first = desc.strip().split("\n")[0]
+    first = first if len(first) <= 70 else first[:67].rstrip() + "…"
+    return f"{len(desc)} симв.{' — ваш текст' if desc != orig else ''} («{first}»)"
+
+
+def edit_description(model, orig):
+    """Поточний опис — окремим повідомленням (щоб скопіювати й виправити), далі — новий текст."""
+    cur = model["description"]
+    kind, v = bp.ask_choice(
+        "Надішліть новий текст опису — він повністю замінить поточний.\n"
+        "Поточний текст — у повідомленні вище: скопіюйте його, виправте й надішліть сюди.",
+        [("orig", "↩️ Як на OLX"), ("none", "🗑 Без опису")], allow_text=True,
+        preview=cur if cur.strip() else "(опису зараз немає)")
+    if kind == "text" and v.strip():
+        model["description"] = tidy_text(v)
+    elif v == "orig":
+        model["description"] = orig
+    elif v == "none":
+        model["description"] = ""
+
+
 def review(model, agent, cfg):
     """Зведення + що змінити. Повертає agent (можливо, новий)."""
+    orig_desc = model["description"]          # як на OLX (без контактів продавця) — для «↩️ Як на OLX»
     while True:
         p = model["price"]
         up = unit_price(model)
         price_line = (f"{p['text']}" + (f" ({up})" if up else "")) if p["show"] and p["text"] else "не показувати"
         text = (f"{presentation_title(model)}\n"
                 f"Ціна: {price_line}\n"
+                f"Опис: {desc_line(model['description'], orig_desc)}\n"
                 f"Фото: {len(model['photos'])}\n"
                 f"Підпис: {agent_text(agent)}")
         opts = [("go", "✅ Зробити презентацію"), ("price", "💲 Змінити ціну"),
-                ("toggle", "🚫 Без ціни" if p["show"] else "💲 Показати ціну"), ("agent", "✍️ Змінити підпис")]
+                ("toggle", "🚫 Без ціни" if p["show"] else "💲 Показати ціну"), ("desc", "📝 Змінити опис"),
+                ("agent", "✍️ Змінити підпис")]
         kind, v = bp.ask_choice(text, opts)
         if kind is None or v == "go":
             return agent
@@ -116,6 +144,8 @@ def review(model, agent, cfg):
                 p["show"] = True
         elif v == "toggle":
             p["show"] = not p["show"]
+        elif v == "desc":
+            edit_description(model, orig_desc)
         elif v == "agent":
             agent = ask_agent()
             cfg["agent"] = agent

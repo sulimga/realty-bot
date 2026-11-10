@@ -136,10 +136,46 @@ class LiveLog:
         self.last_edit = time.monotonic()
 
 
+LONG_ANSWER = 3900      # Telegram ділить повідомлення > 4096 символів на кілька — довгу відповідь збираємо з частин
+LONG_ANSWER_WAIT = 2.5  # сек тиші після останньої частини — відповідь готова
+
+
+def split_text(text, n=4000):
+    """Довгий текст -> частини до n символів (по можливості — по межі рядка)."""
+    text, out = str(text), []
+    while len(text) > n:
+        k = text.rfind("\n", 0, n)
+        k = k if k > n // 2 else n
+        out.append(text[:k])
+        text = text[k:].lstrip("\n")
+    if text.strip():
+        out.append(text)
+    return out
+
+
+async def collect_long_answer(pa, text):
+    """Текстова відповідь, яку Telegram міг розбити на кілька повідомлень: збираємо частини,
+    поки вони надходять, і віддаємо програмі одним текстом через LONG_ANSWER_WAIT сек тиші."""
+    pa.setdefault("parts", []).append(text)
+    pa["last_part"] = time.monotonic()
+    if pa.get("collector"):
+        return
+
+    async def finish():
+        while time.monotonic() - pa["last_part"] < LONG_ANSWER_WAIT:
+            await asyncio.sleep(0.3)
+        if not pa["future"].done():
+            pa["future"].set_result({"text": "\n".join(pa["parts"])})
+    pa["collector"] = asyncio.create_task(finish())
+
+
 async def ask_user(ctx, chat_id, msg):
-    """Питання від програми сайту -> кнопки в Telegram. Чекає відповіді."""
+    """Питання від програми сайту -> кнопки в Telegram. Чекає відповіді.
+    msg["preview"] — довгий текст (напр. поточний опис), окремими звичайними повідомленнями перед питанням."""
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
+    for part in split_text(msg.get("preview") or ""):
+        await ctx.bot.send_message(chat_id, part, disable_web_page_preview=True)
     options = msg.get("options") or []
     rows, row = [], []
     for i, label in enumerate(options):
@@ -982,6 +1018,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if pa and not pa["future"].done():
         if pa.get("allow_text"):
+            if pa.get("parts") is not None or len(text) >= LONG_ANSWER:   # довгий текст прийшов частинами
+                return await collect_long_answer(pa, text)
             pa["future"].set_result({"text": text})
             if pa.get("secret"):                   # напр. адреса з кодом входу — не тримаємо в чаті
                 try:

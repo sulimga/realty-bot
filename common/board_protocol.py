@@ -7,7 +7,10 @@
     {"type": "info",   "text": "..."}                         — повідомлення про хід роботи
     {"type": "ask",    "id": 1, "text": "...",
      "options": [[value, "підпис"], ...] | null,
-     "allow_text": true|false}                                — питання користувачу
+     "allow_text": true|false,
+     "preview": "..."}                                        — питання користувачу; preview (необов'язково) —
+                                                                довгий текст, який бот покаже ОКРЕМИМ повідомленням
+                                                                перед питанням (напр. поточний опис, щоб скопіювати)
     {"type": "result", "ok": true|false, "text": "...",
      "url": "...", "id": "...", "draft": true|false}          — підсумок (останнє повідомлення)
 
@@ -106,10 +109,11 @@ def install_print_hook():
     builtins.print = _protocol_print
 
 
-def ask_choice(text, options=None, allow_text=False, secret=False):
+def ask_choice(text, options=None, allow_text=False, secret=False, preview=None):
     """
     Поставити питання. options — [(value, label), ...] або None (тільки вільна відповідь).
     secret=True — відповідь містить щось чутливе: бот видалить повідомлення з нею з чату.
+    preview — довгий текст окремим повідомленням перед питанням (бот ділить на частини по ~4000 символів).
     Повертає ("opt", value) | ("text", рядок) | (None, None) — пропущено.
     value може бути будь-яким об'єктом: назовні передається лише номер варіанта.
     """
@@ -118,6 +122,8 @@ def ask_choice(text, options=None, allow_text=False, secret=False):
     allow_text = bool(allow_text or not options)
     if INTERACTIVE:
         p = builtins.__dict__.get("__orig_print__", builtins.print)
+        if preview:
+            p(preview)
         for i, (_, label) in enumerate(options, 1):
             p(f"   {i}. {label}")
         while True:
@@ -138,7 +144,8 @@ def ask_choice(text, options=None, allow_text=False, secret=False):
     full = (context + "\n\n" + text).strip() if context else text
     _emit({"type": "ask", "id": _ask_counter, "text": full,
            "options": [str(label) for _, label in options] or None,
-           "allow_text": allow_text, **({"secret": True} if secret else {})})
+           "allow_text": allow_text, **({"secret": True} if secret else {}),
+           **({"preview": str(preview)} if preview else {})})
     line = sys.stdin.readline()
     if not line:
         return None, None
@@ -153,9 +160,9 @@ def ask_choice(text, options=None, allow_text=False, secret=False):
     return None, None
 
 
-def ask_text(text, secret=False):
+def ask_text(text, secret=False, preview=None):
     """Вільна відповідь. Повертає рядок або None (пропущено)."""
-    kind, val = ask_choice(text, None, True, secret=secret)
+    kind, val = ask_choice(text, None, True, secret=secret, preview=preview)
     return val if kind == "text" else None
 
 
