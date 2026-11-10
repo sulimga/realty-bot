@@ -43,7 +43,7 @@ import mapping as M  # noqa: E402
 from olx_client import NET_ERRORS, AuthError, OlxClient, OlxError  # noqa: E402
 
 DATA = os.environ.get("REALTY_DATA_DIR", os.path.join(ROOT, "data"))
-ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")   # «🍪 Cookies» → CRM (адмінка…)
+ADM.COOKIE_FILE = os.path.join(DATA, "secrets", "crm_admin_cookie.txt")   # «🔑 Вхід» → CRM (адмінка…)
 BOARD_DIR = os.path.join(DATA, "olx")
 COOKIES = os.path.join(DATA, "secrets", "olx_cookies.txt")
 AUTH = os.path.join(DATA, "secrets", "olx_auth.txt")
@@ -269,13 +269,13 @@ def crm_admin(estate):
         print("      CRM-адмінка: у презентації нема ID об'єкта — визначаю за заголовком")
         return None
     if not os.path.exists(ADM.COOKIE_FILE):
-        print("      CRM-адмінка: cookie нема (🍪 Cookies → CRM) — визначаю за заголовком")
+        print("      CRM-адмінка: cookie нема (🔑 Вхід → CRM) — визначаю за заголовком")
         return None
     try:
         a = ADM.fetch_estate_admin_data(estate["estate_id"])
     except Exception as e:  # noqa: BLE001 — не блокуємо постинг
         print(f"      CRM-адмінка не відповіла ({type(e).__name__}: {str(e)[:150]}) — визначаю за заголовком. "
-              f"Якщо cookie протух — оновіть: 🍪 Cookies → CRM")
+              f"Якщо cookie протух — оновіть: 🔑 Вхід → CRM")
         return None
     print(f"      CRM-адмінка: категорія «{a.get('category') or '?'}», тип «{a.get('type') or '?'}», "
           f"угода «{a.get('deal') or '?'}»")
@@ -623,7 +623,7 @@ def cmd_login(a):
                 print(f"Без коду{' (' + err.group(1) + ')' if err else ''} — пробую інший варіант посилання")
                 continue
             raise OlxError("в адресі нема коду входу (code=…). Перешліть, будь ласка, Claude текст помилки OLX — "
-                           "налаштуємо. А поки — ручний варіант: 🍪 Cookies → OLX → «Вставити токен вручну»")
+                           "налаштуємо. А поки — ручний варіант: 🔑 Вхід → OLX → «Вставити токен вручну»")
         got_state = re.search(r"[?&#]state=([^&\s#]+)", ans)
         if got_state and got_state.group(1) != state:
             raise OlxError("це адреса від іншого посилання входу — натисніть «Увійти за посиланням» ще раз")
@@ -649,7 +649,7 @@ def cmd_keepalive(a):
         return
     if not client.refresh_oauth():
         bp.result(False, f"OLX: постійний вхід не оновився ({client.refresh_error}). Якщо повториться — "
-                         f"увійдіть в OLX в інкогніто і надішліть новий refresh token: 🍪 Cookies → OLX")
+                         f"увійдіть в OLX в інкогніто і надішліть новий refresh token: 🔑 Вхід → OLX")
         return
     bp.result(True, f"OLX: вхід оновлено, токен діє ще {fmt_left(client.token_expires_in())}")
 
@@ -690,7 +690,7 @@ def cmd_check(a):
 
 def finish_error(e):
     if isinstance(e, AuthError):
-        bp.result(False, f"OLX: немає входу — {e}.\nНалаштуйте постійний вхід: кнопка «🍪 Cookies» → OLX "
+        bp.result(False, f"OLX: немає входу — {e}.\nНалаштуйте постійний вхід: кнопка «🔑 Вхід» → OLX "
                          f"(там інструкція), або разово надішліть рядок Authorization (Bearer …)")
     elif isinstance(e, NET_ERRORS):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")

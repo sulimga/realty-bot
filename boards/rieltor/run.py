@@ -68,12 +68,12 @@ class CookieMissing(Exception):
 
 def load_cookie():
     if not os.path.exists(COOKIES):
-        raise CookieMissing("немає cookie. Додайте їх: кнопка «🍪 Cookies» → rieltor")
+        raise CookieMissing("немає cookie. Додайте їх: кнопка «🔑 Вхід» → rieltor")
     raw = open(COOKIES, encoding="utf-8").read().strip()
     if raw.lower().startswith("cookie:"):
         raw = raw.split(":", 1)[1].strip()
     if not raw:
-        raise CookieMissing("файл cookie порожній. Додайте їх: кнопка «🍪 Cookies» → rieltor")
+        raise CookieMissing("файл cookie порожній. Додайте їх: кнопка «🔑 Вхід» → rieltor")
     return raw
 
 
@@ -236,7 +236,7 @@ def cmd_post(a):
         bp.result(True, "rieltor: опубліковано" + (f" (№ {offer_id})" if offer_id else "") +
                   ". Перевірте в кабінеті rieltor.ua → Оголошення", id=offer_id)
     elif resp.status_code in (401, 403):
-        bp.result(False, "rieltor: cookie застаріли. Оновіть: кнопка «🍪 Cookies» → rieltor", stop_batch=True)
+        bp.result(False, "rieltor: cookie застаріли. Оновіть: кнопка «🔑 Вхід» → rieltor", stop_batch=True)
     else:
         extra = ""
         if "address_invalid" in str(body):
@@ -352,7 +352,7 @@ def cmd_delete(a):
     save_log("delete", res)
     t = f"rieltor: видалено {res['ok']} з {res['total']} оголошень «{scope}»"
     if res["stopped"] == "cookie":
-        t += ". Зупинено: cookie застаріли (кнопка «🍪 Cookies» → rieltor)"
+        t += ". Зупинено: cookie застаріли (кнопка «🔑 Вхід» → rieltor)"
     elif res["stopped"] == "fails":
         t += f". Зупинено після {RF.MAX_CONSECUTIVE_FAILS} помилок поспіль"
     if res["failed"]:
@@ -398,7 +398,7 @@ def main():
         bp.result(False, f"rieltor: {e}", stop_batch=True)
     except requests.HTTPError as e:
         code = getattr(e.response, "status_code", "")
-        hint = " — схоже, cookie застаріли (кнопка «🍪 Cookies» → rieltor)" if code in (401, 403) else ""
+        hint = " — схоже, cookie застаріли (кнопка «🔑 Вхід» → rieltor)" if code in (401, 403) else ""
         bp.result(False, f"rieltor: помилка HTTP {code}{hint}", stop_batch=code in (401, 403))
     except BaseException as e:  # noqa: BLE001
         bp.info(traceback.format_exc()[-1500:])

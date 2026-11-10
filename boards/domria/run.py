@@ -164,7 +164,7 @@ def resolve_user_id(cfg):
 
 def load_cfg():
     if not os.path.exists(COOKIES) or not open(COOKIES, encoding="utf-8").read().strip():
-        raise domria_client.DomRiaError("немає cookie. Додайте їх: кнопка «🍪 Cookies» → dom.ria")
+        raise domria_client.DomRiaError("немає cookie. Додайте їх: кнопка «🔑 Вхід» → dom.ria")
     cfg = P.load_config()
     cfg["cookies_file"] = COOKIES
     return resolve_user_id(cfg)
@@ -172,7 +172,7 @@ def load_cfg():
 
 def finish_error(e):
     if isinstance(e, domria_client.AuthError):
-        bp.result(False, f"dom.ria: cookie застаріли ({e}). Оновіть їх: кнопка «🍪 Cookies» → dom.ria.")
+        bp.result(False, f"dom.ria: cookie застаріли ({e}). Оновіть їх: кнопка «🔑 Вхід» → dom.ria.")
     elif isinstance(e, requests.exceptions.RequestException):
         bp.result(False, f"dom.ria не відповідає ({type(e).__name__}). Спробуйте ще раз за кілька хвилин. "
                          f"Якщо чернетку вже створено — вона в кабінеті dom.ria, повторна спроба створить нову.")
@@ -201,7 +201,7 @@ def cmd_post(a):
         bp.result(True, f"dom.ria: опубліковано (№ {rid}), техпаспорт на перевірці", url=url, id=rid)
     else:
         bp.result(True, f"dom.ria: чернетку створено (№ {rid}). Опублікувати: додайте техпаспорт "
-                        f"(кнопка «📎 Техпаспорт до чернетки») або в кабінеті dom.ria",
+                        f"у кабінеті dom.ria",
                   url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
 
 

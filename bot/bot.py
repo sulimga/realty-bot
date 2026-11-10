@@ -47,16 +47,14 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
 BTN_POST = "📤 Викласти оголошення"
-BTN_TP = "📎 Техпаспорт до чернетки"
-BTN_COOKIES = "🍪 Cookies"
+BTN_LOGIN = "🔑 Вхід"                      # до 10.11.2026 — «🔑 Вхід»
 BTN_REFRESH = "🔄 Оновити дати rieltor"
 BTN_DELETE = "🗑 Видалити оголошення rieltor"
-BTN_STATUS = "ℹ️ Статус"
+# 10.11.2026: прибрано кнопки «📎 Техпаспорт до чернетки» і «ℹ️ Статус» (статус — команда /status).
+# Код сценарію техпаспорта до чернетки (start_tp, await_tp_id, tpid:) лишився — щоб повернути, додати кнопку.
 _ROW_REFRESH = [KeyboardButton(BTN_REFRESH)] + ([KeyboardButton(BTN_DELETE)] if not INSTANCE else [])  # видалення — лише в головному боті
-MENU = ReplyKeyboardMarkup([[KeyboardButton(BTN_POST)],
-                            [KeyboardButton(BTN_TP), KeyboardButton(BTN_COOKIES)],
-                            _ROW_REFRESH,
-                            [KeyboardButton(BTN_STATUS)]],
+MENU = ReplyKeyboardMarkup([[KeyboardButton(BTN_POST), KeyboardButton(BTN_LOGIN)],
+                            _ROW_REFRESH],
                            resize_keyboard=True)
 
 
@@ -623,7 +621,7 @@ async def start_cookies(update, ctx):
     rows = [[InlineKeyboardButton(b["title"], callback_data=f"ck:{k}")] for k, b in D.boards().items()]
     rows.append([InlineKeyboardButton(CRM_ADMIN_TITLE, callback_data=f"ck:{CRM_ADMIN_KEY}")])
     kb = InlineKeyboardMarkup(rows)
-    await update.message.reply_text("Для якого сайту оновити cookie?", reply_markup=kb)
+    await update.message.reply_text("Вхід: для якого сайту?", reply_markup=kb)
 
 
 def key_has_login(key):
@@ -922,12 +920,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(f"Зараз іде пакет rieltor ({b['i']}/{b['n']}). "
                                                    "Дочекайтесь або зупиніть: /cancel")
         return await start_post(update, ctx)
-    if text == BTN_TP:
-        return await start_tp(update, ctx)
-    if text == BTN_COOKIES:
+    if text == BTN_LOGIN:
         return await start_cookies(update, ctx)
-    if text == BTN_STATUS:
-        return await show_status(update, ctx)
     if text == BTN_REFRESH:
         if ctx.application.bot_data.get("busy"):
             return await update.message.reply_text("Зачекайте, іде інша дія.")
@@ -1089,7 +1083,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.application.bot_data["busy"] = True          # одразу, щоб не запустити двічі
         ctx.application.create_task(run_batch(ctx, chat_id, urls))
         return await ctx.bot.send_message(chat_id, f"▶️ Пакет запущено: {len(urls)} оголошень. "
-                                                   "Прогрес — «ℹ️ Статус».", reply_markup=MENU)
+                                                   "Прогрес — /status.", reply_markup=MENU)
 
     if data == "boards_next" and s.get("mode") == "choose_boards":
         if not s["selected"]:

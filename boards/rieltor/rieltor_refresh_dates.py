@@ -438,7 +438,7 @@ def summary_text(res: dict) -> str:
     if res["limit"]:
         t += f". Сайт повідомив про ліміт: «{res['limit_text']}». Не оновлено сьогодні: {left}"
     elif res["stopped"] == "cookie":
-        t += ". Зупинено: cookie застаріли (кнопка «🍪 Cookies» → rieltor)"
+        t += ". Зупинено: cookie застаріли (кнопка «🔑 Вхід» → rieltor)"
     elif res["stopped"] == "fails":
         t += f". Зупинено після {MAX_CONSECUTIVE_FAILS} помилок поспіль"
     if res["failed"]:
