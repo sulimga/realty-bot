@@ -915,8 +915,7 @@ def cmd_keepalive(a):
         try:
             off.refresh()
         except (OlxApiError,) + NET_ERRORS as e:
-            bp.result(False, f"OLX: офіційний доступ не оновився ({str(e)[:200]}). Підключіть заново: 🔑 Вхід → OLX → "
-                             f"✅ Підключити (офіційно)")
+            bp.result(False, f"OLX: офіційний доступ не оновився ({str(e)[:200]}). Підключіть заново: 🔑 Вхід → OLX")
             return
         bp.result(True, f"OLX: офіційний доступ оновлено, токен діє ще {fmt_left(off.expires_in())}")
         return
@@ -968,8 +967,7 @@ def cmd_check(a):
 
 def finish_error(e):
     if isinstance(e, AuthError):
-        bp.result(False, f"OLX: немає входу — {e}.\nНалаштуйте постійний вхід: кнопка «🔑 Вхід» → OLX "
-                         f"(там інструкція), або разово надішліть рядок Authorization (Bearer …)")
+        bp.result(False, f"OLX: немає входу — {e}.\nПідключіть OLX: кнопка «🔑 Вхід» → OLX, потім «Дозволити» на сайті OLX.")
     elif isinstance(e, NET_ERRORS):
         bp.result(False, f"OLX не відповідає ({type(e).__name__}: {str(e)[:200]}). Спробуйте ще раз за кілька хвилин.")
     elif isinstance(e, OlxApiError):
