@@ -194,9 +194,22 @@ def _editor_host_sync():
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(f"http://127.0.0.1:{EDIT_PORT}/edit/health", timeout=2) as r:
-            return host if r.status == 200 else None
+            if r.status != 200:
+                return None
     except Exception:  # noqa: BLE001 — служба не запущена або стара версія (404)
         return None
+    return host if _editor_external_ok(host) else None
+
+
+def _editor_external_ok(host):
+    """Адреса відкривається ззовні з HTTPS (як у deploy/setup-callback.sh). Якщо в панелі Oracle не відкриті порти
+    80/443 — False, і бот не дає кнопку, яка відкрила б порожнє вікно."""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"https://{host}/edit/health", timeout=4) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def editor_host():
