@@ -454,7 +454,22 @@ URL-патерн і інший cookie, ніж публічна презента�
    [{code,value|values}]`; категорія має бути листовою; нові оголошення — `new` (модерація) або `limited` (потрібен пакет).
    ⚠️ Для МУЛЬТИБОТА переносити разом: `boards/olx/olx_official.py`, зміни `boards/olx/run.py`, `dispatcher/boards.json` (`api_login_cmd`)
    і в `bot/bot.py` — `/olxapp`, `/olxprobe`, режими `oa_id`/`oa_secret`, `lg2:` і кнопку в `ck:`.
-   Далі: підключити акаунт → `/olxprobe` → по файлу з відповідями писати публікацію (категорії, атрибути, локація, фото-посилання).
+   **Перша проба на живому OLX (10.11.2026) — усе працює, GET 200:** `/users/me` ({id, status, name, phone_login, is_business}),
+   `/categories` (2206 шт.: {id, name, parent_id, photos_limit, is_leaf}; `?parent_id=` — діти), `/categories/{id}/attributes`
+   (атрибути: code, label, validation{required, numeric, min, max, allow_multiple_values}, values[{code,label}]), `/adverts`
+   (список власних оголошень, у т.ч. створених раніше через сайт/нашого бота), `/users/me/packets` ({id, name, is_active, size, left,
+   active_to, package_type, categories_ids}; `left`/`is_active` — для показу залишку розміщень). `/packets` без `category_id` → 400;
+   `/users/me/thresholds`, `/thresholds` → 404. **ІДЕНТИФІКАТОРИ КАТЕГОРІЙ ТА КОДИ АТРИБУТІВ ЗБІГАЮТЬСЯ З САЙТОМ** (1758, 1760, 1602,
+   330, 1612, 1614; floor, total_floors, total_area, kitchen_area, number_of_rooms_string, apartments_object_type, repair, house_type…) →
+   `mapping.py` і `categories.json` можна використовувати як є: `attributes: [{code, value}]`, для множинних — `{code, values:[…]}`.
+   Модель оголошення (як її віддає API): id, status (new/limited/active/outdated…), url, title, description, category_id,
+   advertiser_type (business), external_id, contact {name, phone}, location {city_id, district_id, latitude, longitude}, images [{url}],
+   price {value, currency, negotiable, budget, trade}, attributes [{code, value, values}]. `/cities` без фільтра віддає 1000 міст
+   {id, region_id, name, county, municipality, latitude, longitude}. Усі пакети на акаунті прострочені (`is_active=false`) → нове
+   оголошення, імовірно, піде як `limited` (чекає оплати/пакета) — як і зараз.
+   Не з'ясовано (раунд 2 — `/olxprobe 2`): пошук міста за назвою, райони, пакети за категорією, чи обов'язкові latitude/longitude,
+   чи приймає OLX фото з посилань CRM. Далі — переписати публікацію під офіційний API (першою — з пробним створенням в статусі
+   `limited` лише за дозволом користувача).
    ⚠️ Ще НЕ зроблено: публікація через офіційний API. Теперішня програма постить через внутрішній API сайту
    (posting-services…), токен офіційного OAuth для нього, найімовірніше, не підійде — потрібен окремий клієнт офіційного API
    (інша модель даних оголошення). Спершу — `probe` на реальному токені (користувач, категорії нерухомості й атрибути, пакети,
