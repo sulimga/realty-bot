@@ -705,6 +705,35 @@ def _find_named(x, pat, out, depth=0):
             _find_named(v, pat, out, depth + 1)
 
 
+def _probe_round2(off, call, report):
+    """Раунд 2: пошук міст/районів, пакети за категорією, окреме оголошення, статуси. Лише GET."""
+    for prm in ({"name": "Київ"}, {"query": "Київ"}, {"q": "Київ"}, {"city_name": "Київ"}, {"limit": 5, "offset": 5}):
+        st, b = call("/cities", prm, show=False, trim=5)
+        n = (b or {}).get("_total_items") if isinstance(b, dict) else None
+        tot = len(b.get("data") or []) if isinstance(b, dict) and isinstance(b.get("data"), list) else "?"
+        first = ((b.get("data") or [{}])[0].get("name") if isinstance(b, dict) and b.get("data") else None)
+        print(f"/cities {prm} → HTTP {st}, елементів {n or tot}, перший: {first}")
+    for path in ("/cities/268", "/cities/268/districts", "/districts", "/regions", "/categories/1758"):
+        call(path, {"city_id": 268} if path == "/districts" else None, trim=10)
+    for cid in (1758, 1602, 1760):
+        call("/packets", {"category_id": cid}, trim=10)
+    st, ads = call("/adverts", {"limit": 50}, show=False, trim=0)
+    if st == 200 and isinstance(ads, dict) and isinstance(ads.get("data"), list):
+        from collections import Counter
+        print("оголошень у відповіді: " + str(len(ads["data"])) + "; за статусами: "
+              + ", ".join(f"{k}={v}" for k, v in Counter(x.get("status") for x in ads["data"]).items()))
+        if ads["data"]:
+            call(f"/adverts/{ads['data'][0]['id']}", trim=0, show=False)
+    for k, v in report.items():
+        if k.startswith(("/adverts/", "/regions", "/districts", "/cities/", "/packets")):
+            print(f"{k} → {v.get('status', 'помилка')}")
+    path = os.path.join(BOARD_DIR, "api_probe2.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
+    bp.result(True, "OLX API: розвідку (раунд 2) виконано (лише читання). Файл — нижче, перешліть його Claude.",
+              files=[{"path": path, "name": "olx_api_probe2.json"}])
+
+
 def cmd_api_probe(a):
     """Розвідка офіційного API на живому токені: нічого не створює й не змінює (лише GET).
     Усі відповіді складає в один JSON-файл і надсилає в чат — по ньому пишемо публікацію через офіційний API."""
@@ -712,7 +741,7 @@ def cmd_api_probe(a):
     off.ensure_token()
     report = {}
 
-    def call(path, params=None, show=True):
+    def call(path, params=None, show=True, trim=0):
         key = path + ("?" + "&".join(f"{k}={v}" for k, v in params.items()) if params else "")
         try:
             st, body = off.get(path, params)
@@ -720,11 +749,16 @@ def cmd_api_probe(a):
             report[key] = {"error": f"{type(e).__name__}: {e}"}
             print(f"GET {key} → помилка: {type(e).__name__}: {str(e)[:150]}")
             return None, None
-        report[key] = {"status": st, "body": _mask(body)}
+        b = _mask(body)
+        if trim and isinstance(b, dict) and isinstance(b.get("data"), list) and len(b["data"]) > trim:
+            b = {**b, "data": b["data"][:trim], "_total_items": len(b["data"])}     # у файл — лише початок списку
+        report[key] = {"status": st, "body": b}
         if show:
             print(f"GET {key} → HTTP {st}: {_brief(_mask(body), 260)}")
         return st, body
 
+    if getattr(a, "round", 1) == 2:
+        return _probe_round2(off, call, report)
     call("/users/me")
     st, cats = call("/categories", show=False)
     found = []
@@ -838,7 +872,8 @@ def main():
     sub.add_parser("keepalive")
     sub.add_parser("login")
     sub.add_parser("api-login")
-    sub.add_parser("api-probe")
+    pp = sub.add_parser("api-probe")
+    pp.add_argument("--round", type=int, default=1)
     a = ap.parse_args()
     try:
         {"post": cmd_post, "check": cmd_check, "keepalive": cmd_keepalive, "login": cmd_login,

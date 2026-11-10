@@ -1135,7 +1135,8 @@ async def cmd_olxprobe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if ctx.application.bot_data.get("busy"):
         return await update.message.reply_text("Зачекайте, іде інша дія.")
-    await run_board(ctx, update.effective_chat.id, "olx", ["api-probe"])
+    rnd = "2" if (ctx.args or [""])[0] == "2" else "1"            # /olxprobe 2 — другий раунд (міста, пакети, оголошення)
+    await run_board(ctx, update.effective_chat.id, "olx", ["api-probe", "--round", rnd])
 
 
 async def cmd_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
