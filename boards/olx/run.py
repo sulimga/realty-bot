@@ -480,13 +480,106 @@ def offer_id(body):
     return None, None
 
 
+# ------------------------------------------------------------------ офіційний API: публікація
+def to_attributes(params):
+    """parameters сайту → attributes офіційного API (коди збігаються): [{code, value}] або [{code, values:[…]}];
+    ціна йде окремим об'єктом price."""
+    out = []
+    for code, v in params.items():
+        if code == "price":
+            continue
+        if isinstance(v, bool):
+            if not v:
+                continue                          # вимкнені прапорці просто не передаємо
+            v = "1"
+        if v is None or v == "" or v == []:
+            continue
+        if isinstance(v, (list, tuple)):
+            out.append({"code": code, "values": [str(x) for x in v]})
+        else:
+            out.append({"code": code, "value": str(v)})
+    return out
+
+
+def official_price(params):
+    pr = params["price"]
+    try:
+        val = float(pr["price"])
+        val = int(val) if val == int(val) else val
+    except (TypeError, ValueError):
+        val = pr["price"]
+    return {"value": val, "currency": pr["currency"], "negotiable": bool(pr.get("arranged")),
+            "budget": False, "trade": False}
+
+
+def official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate):
+    payload = {"title": title, "description": desc, "category_id": cid,
+               "advertiser_type": cfg.get("private_business", "business"),
+               "contact": {"name": cont["person"], "phone": cont["phone"]},
+               "location": {k: loc[k] for k in ("city_id", "district_id", "latitude", "longitude")
+                            if loc.get(k) is not None},
+               "images": [{"url": u} for u in urls],
+               "price": official_price(params), "attributes": to_attributes(params)}
+    art = (estate.get("article") or "").strip().lstrip("#")
+    if art:
+        payload["external_id"] = art              # артикул CRM — потім за ним знаходимо оголошення (таблиця об'єктів)
+    return payload
+
+
+def packets_left(off, cid):
+    """Скільки розміщень залишилось в активних пакетах для категорії (None — не вдалось дізнатись)."""
+    try:
+        st, body = off.get("/users/me/packets")
+    except (OlxApiError,) + NET_ERRORS:
+        return None
+    if st != 200 or not isinstance(body, dict) or not isinstance(body.get("data"), list):
+        return None
+    return sum(int(p.get("left") or 0) for p in body["data"]
+               if p.get("is_active") and str(cid) in [str(x) for x in (p.get("categories_ids") or [])])
+
+
+def contacts_api(off, cfg):
+    """Ім'я й телефон для контакту (email в офіційному API не потрібен). Беремо з налаштувань, інакше з акаунта OLX."""
+    me = {}
+    if not (cfg.get("person") and cfg.get("phone")):
+        try:
+            st, body = off.get("/users/me")
+            if st == 200 and isinstance(body, dict) and isinstance(body.get("data"), dict):
+                me = body["data"]
+        except (OlxApiError,) + NET_ERRORS:
+            me = {}
+    changed = False
+    for key, label, guess in (("person", "Контактна особа (ім'я в оголошенні)", me.get("name")),
+                              ("phone", "Телефон для оголошення", me.get("phone") or me.get("phone_login"))):
+        if cfg.get(key):
+            continue
+        if guess:
+            kind, val = bp.ask_choice(f"OLX: {label}", [(guess, str(guess))], allow_text=True)
+        else:
+            kind, val = ("text", bp.ask_text(f"OLX: {label} (запам'ятаю для наступних оголошень)"))
+        if not val:
+            raise OlxError(f"не вказано: {label}")
+        cfg[key] = str(val).strip()
+        changed = True
+    if changed:
+        save_cfg(cfg)
+    return {"person": cfg["person"], "phone": cfg["phone"]}
+
+
 # ------------------------------------------------------------------ команди
 def cmd_post(a):
     cfg = load_cfg()
-    client = None if a.dry_run else make_client(cfg)
-    report = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "url": a.url, "dry_run": a.dry_run}
+    off = OfficialClient(DATA)
+    use_api = off.connected()                               # офіційне підключення («Дозволити») — пріоритетне
+    client = None if (a.dry_run or use_api) else make_client(cfg)
+    report = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "url": a.url, "dry_run": a.dry_run,
+              "mode": "official_api" if use_api else "site"}
     try:
-        if client:
+        if use_api:
+            print("OLX: публікація через офіційний доступ")
+            if not a.dry_run:
+                off.ensure_token()
+        elif client:
             client.me()                                     # одразу перевіряємо, що cookie живі
 
         from extract_estate import fetch_estate_data
@@ -529,7 +622,12 @@ def cmd_post(a):
                 raise OlxError("опис закороткий")
             desc = t.strip() + ("\n\n" + M.spaced_article(estate.get("article")) if estate.get("article") else "")
 
-        cont = contacts(client, cfg) if client else {k: cfg.get(k) or "?" for k in ("person", "phone", "email")}
+        if client:
+            cont = contacts(client, cfg)
+        elif use_api and not a.dry_run:
+            cont = contacts_api(off, cfg)
+        else:
+            cont = {k: cfg.get(k) or "?" for k in ("person", "phone", "email")}
 
         urls = estate.get("photos") or []
         limit = M.max_photos(cid)
@@ -537,19 +635,27 @@ def cmd_post(a):
             notes.append(f"фото: у CRM {len(urls)}, OLX приймає максимум {limit} — беру перші {limit}")
             urls = urls[:limit]
 
-        payload = {"brand": "olxua", "lang": "uk", "category_id": cid,
-                   **{k: loc[k] for k in ("city_id", "district_id") if k in loc},
-                   "description": desc, "email": cont["email"], "parameters": params,
-                   "person": cont["person"], "phone": cont["phone"], "images": [], "title": title,
-                   "private_business": cfg.get("private_business", "business"),
-                   "components_data": {"reposting": {"action": "ad_posted", "data": "{\"reposting\":false}"}},
-                   **{k: loc[k] for k in ("latitude", "longitude", "radius", "zoom")}}
+        if use_api:
+            payload = official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate)
+        else:
+            payload = {"brand": "olxua", "lang": "uk", "category_id": cid,
+                       **{k: loc[k] for k in ("city_id", "district_id") if k in loc},
+                       "description": desc, "email": cont["email"], "parameters": params,
+                       "person": cont["person"], "phone": cont["phone"], "images": [], "title": title,
+                       "private_business": cfg.get("private_business", "business"),
+                       "components_data": {"reposting": {"action": "ad_posted", "data": "{\"reposting\":false}"}},
+                       **{k: loc[k] for k in ("latitude", "longitude", "radius", "zoom")}}
 
         summary = [f"Категорія: {M.cat_label(cid)}", f"Заголовок: {title}",
                    f"Ціна: {params['price']['price']} {params['price']['currency']}"
                    + (" (договірна)" if params["price"].get("arranged") else ""),
                    "; ".join(describe_params(cid, params)),
                    f"Місце: {place}", f"Фото: {len(urls)}"] + [f"⚠️ {n}" for n in notes]
+        if use_api and not a.dry_run:
+            left = packets_left(off, cid)
+            summary.append("Пакети OLX: " + ("не вдалось дізнатись" if left is None else
+                           (f"є {left} розміщень — спишеться з пакета" if left > 0 else
+                            "активних немає — оголошення чекатиме оплати")))
         print("\n".join(summary))
         report["payload"] = payload
 
@@ -565,15 +671,21 @@ def cmd_post(a):
             bp.result(False, "OLX: скасовано, на OLX нічого не відправлено")
             return
 
-        print(f"[3/5] Фото на OLX ({len(urls)})…")
-        images, failed = upload_photos(client, urls)
-        if not images:
-            raise OlxError("не завантажилось жодне фото — оголошення не створюю")
-        payload["images"] = images
-        print(f"[3/5] Фото завантажено: {len(images)} з {len(urls)}")
+        failed = 0
+        if use_api:
+            print(f"[3/5] Фото ({len(urls)}) OLX забере за посиланнями CRM")
+            print("[4/5] Створюю оголошення (офіційний API)…")
+            status, body = off.request("POST", "/adverts", body=payload)
+        else:
+            print(f"[3/5] Фото на OLX ({len(urls)})…")
+            images, failed = upload_photos(client, urls)
+            if not images:
+                raise OlxError("не завантажилось жодне фото — оголошення не створюю")
+            payload["images"] = images
+            print(f"[3/5] Фото завантажено: {len(images)} з {len(urls)}")
 
-        print("[4/5] Створюю оголошення…")
-        status, body = client.create_offer(payload)
+            print("[4/5] Створюю оголошення…")
+            status, body = client.create_offer(payload)
         report["response"] = {"status": status, "body": body}
         if status >= 400:
             errs = offer_errors(body)
@@ -582,7 +694,15 @@ def cmd_post(a):
         report["offer_id"] = oid
         print("[5/5] Готово")
         extra = f" (фото не завантажились: {failed})" if failed else ""
-        bp.result(True, f"OLX: оголошення створено (№ {oid or '?'}){extra}. Воно чекає на оплату розміщення — "
+        ad_status = ((body.get("data") or {}).get("status") if isinstance(body, dict) and isinstance(body.get("data"), dict)
+                     else None)
+        if use_api and ad_status in ("new", "active", "activating"):
+            bp.result(True, f"OLX: оголошення створено (№ {oid or '?'}, статус «{ad_status}»){extra}. "
+                            f"Якщо розміщення в пакеті було — воно піде на модерацію.",
+                      url=url or "https://www.olx.ua/uk/myaccount/", id=oid, draft=False)
+            return
+        bp.result(True, f"OLX: оголошення створено (№ {oid or '?'}"
+                        + (f", статус «{ad_status}»" if ad_status else "") + f"){extra}. Воно чекає на оплату розміщення — "
                         f"активуйте в кабінеті OLX «Мої оголошення».",
                   url=url or "https://www.olx.ua/uk/myaccount/", id=oid, draft=True)
     finally:
