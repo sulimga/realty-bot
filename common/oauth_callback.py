@@ -94,6 +94,9 @@ padding:28px;text-align:center}}h1{{font-size:22px;margin:0 0 12px}}p{{color:#b8
 </head><body><div class="c"><h1>{title}</h1><p>{text}</p></div></body></html>"""
 
 
+SPOOL_FILE_RE = re.compile(r"^[0-9a-f]{64}\.json$")        # <sha256(state)>.json
+
+
 def key_for(state):
     return hashlib.sha256(state.encode("utf-8")).hexdigest()
 
@@ -103,7 +106,7 @@ def cleanup(now=None):
     try:
         for n in os.listdir(SPOOL):
             p = os.path.join(SPOOL, n)
-            if n.endswith(".json") and now - os.path.getmtime(p) > TTL:
+            if SPOOL_FILE_RE.match(n) and now - os.path.getmtime(p) > TTL:   # лише коди повернення; olx_app.json і host.txt не чіпаємо
                 os.remove(p)
     except OSError:
         pass
