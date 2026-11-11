@@ -8,7 +8,7 @@
 #   3. бере ту саму підмережу, що в машини realty-multi (там уже відкриті 80/443), образ Ubuntu 24.04 для ARM;
 #   4. створює realty-multi-arm: VM.Standard.A1.Flex, 2 OCPU, 3 ГБ (щоб пам'ять була ≥ 20% і машину не вважали
 #      простоєм), диск 50 ГБ, публічна IP; cloud-init лише готує систему (часовий пояс, swap, пакети) — бота НЕ ставить;
-#   5. немає вільних потужностей — пробує інші availability domain; не вийшло — пише, що спробувати пізніше.
+#   5. немає вільних потужностей — пробує 1 ядро / 3 ГБ і інші availability domain; не вийшло — пише, що спробувати пізніше.
 # Повторний запуск безпечний: якщо realty-multi-arm уже є — просто показує її IP.
 set -uo pipefail
 NAME=realty-multi-arm
@@ -65,31 +65,34 @@ runcmd:
   - [bash, -c, "apt-get -o DPkg::Lock::Timeout=600 update -y && apt-get -o DPkg::Lock::Timeout=600 install -y git python3-venv python3-pip rsync > /var/log/realty-prep.log 2>&1; echo PREP OK >> /var/log/realty-prep.log"]
 EOF
 
+# спершу 2 ядра / 3 ГБ, якщо місця нема — 1 ядро / 3 ГБ (менші машини частіше знаходять місце; ядра можна додати пізніше)
 for AD in $ADS; do
-  EXIST="$(q compute instance list -c "$T" --display-name "$NAME" --query 'data[?"lifecycle-state"!=`TERMINATED`] | [0].id' --raw-output)"
-  if [ -n "$EXIST" ] && [ "$EXIST" != "null" ]; then
-    echo "⚠️ $NAME уже з'явилась ($EXIST) — другу не створюю. Перевірте в Compute → Instances."; exit 1
-  fi
-  echo "▶ Створюю $NAME у $AD (до 5 хв)…"
-  OUT="$(oci compute instance launch -c "$T" --availability-domain "$AD" --shape VM.Standard.A1.Flex \
-        --shape-config '{"ocpus": 2, "memoryInGBs": 3}' --image-id "$IMG" --subnet-id "$SUBNET" \
-        --assign-public-ip true --display-name "$NAME" --boot-volume-size-in-gbs 50 \
-        --ssh-authorized-keys-file ~/.ssh/realty_arm.pub --user-data-file ~/realty-arm-prep.yaml \
-        --wait-for-state RUNNING --max-wait-seconds 600 --query 'data.id' --raw-output 2>&1)"
-  ID="$(printf '%s\n' "$OUT" | grep -o 'ocid1\.instance[^" ]*' | head -1)"
-  if [ -n "$ID" ]; then
-    IP="$(q compute instance list-vnics --instance-id "$ID" --query 'data[0]."public-ip"' --raw-output)"
-    echo "✅ Готово: $NAME працює, публічна IP: $IP"
-    echo "   Вхід з Cloud Shell: ssh -i ~/.ssh/realty_arm ubuntu@$IP"
-    exit 0
-  fi
-  if printf '%s' "$OUT" | grep -qi "capacity"; then
-    echo "  у $AD немає вільних ARM-потужностей"
-    continue
-  fi
-  echo "❌ Помилка (не «немає потужностей») — зупиняюсь, щоб не створити зайвого:"
-  printf '%s\n' "$OUT" | grep -iE '"message"|"code"|error|fail' | head -8 | sed 's/^/   /'
-  exit 1
+  for SHAPE in '{"ocpus": 2, "memoryInGBs": 3}' '{"ocpus": 1, "memoryInGBs": 3}'; do
+    EXIST="$(q compute instance list -c "$T" --display-name "$NAME" --query 'data[?"lifecycle-state"!=`TERMINATED`] | [0].id' --raw-output)"
+    if [ -n "$EXIST" ] && [ "$EXIST" != "null" ]; then
+      echo "⚠️ $NAME уже з'явилась ($EXIST) — другу не створюю. Перевірте в Compute → Instances."; exit 1
+    fi
+    echo "▶ Створюю $NAME у $AD, $SHAPE (до 5 хв)…"
+    OUT="$(oci compute instance launch -c "$T" --availability-domain "$AD" --shape VM.Standard.A1.Flex \
+          --shape-config "$SHAPE" --image-id "$IMG" --subnet-id "$SUBNET" \
+          --assign-public-ip true --display-name "$NAME" --boot-volume-size-in-gbs 50 \
+          --ssh-authorized-keys-file ~/.ssh/realty_arm.pub --user-data-file ~/realty-arm-prep.yaml \
+          --wait-for-state RUNNING --max-wait-seconds 600 --query 'data.id' --raw-output 2>&1)"
+    ID="$(printf '%s\n' "$OUT" | grep -o 'ocid1\.instance[^" ]*' | head -1)"
+    if [ -n "$ID" ]; then
+      IP="$(q compute instance list-vnics --instance-id "$ID" --query 'data[0]."public-ip"' --raw-output)"
+      echo "✅ Готово: $NAME працює ($SHAPE), публічна IP: $IP"
+      echo "   Вхід з Cloud Shell: ssh -i ~/.ssh/realty_arm ubuntu@$IP"
+      exit 0
+    fi
+    if printf '%s' "$OUT" | grep -qi "capacity"; then
+      echo "  немає вільних ARM-потужностей"
+      continue
+    fi
+    echo "❌ Помилка (не «немає потужностей») — зупиняюсь, щоб не створити зайвого:"
+    printf '%s\n' "$OUT" | grep -iE '"message"|"code"|error|fail' | head -8 | sed 's/^/   /'
+    exit 1
+  done
 done
 echo "❌ Зараз ARM-машин немає в жодному AD. Це звично для Oracle — запустіть ще раз за 10–60 хв."
 exit 2
