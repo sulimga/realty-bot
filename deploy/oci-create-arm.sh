@@ -17,7 +17,9 @@ q() { oci "$@" 2>/dev/null; }
 
 echo "▶ Ключ для входу на нову машину"
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
-[ -f ~/.ssh/realty_arm ] || ssh-keygen -q -t ed25519 -N "" -C realty-arm -f ~/.ssh/realty_arm
+# Cloud Shell працює в режимі FIPS — ed25519 там заборонений, тому RSA 4096
+[ -f ~/.ssh/realty_arm ] || ssh-keygen -q -t rsa -b 4096 -N "" -C realty-arm -f ~/.ssh/realty_arm
+[ -f ~/.ssh/realty_arm.pub ] || { echo "❌ Не вдалося створити ключ ~/.ssh/realty_arm"; exit 1; }
 echo "  ~/.ssh/realty_arm (лишається в Cloud Shell)"
 
 EXIST="$(q compute instance list -c "$T" --display-name "$NAME" --query 'data[?"lifecycle-state"!=`TERMINATED`] | [0].id' --raw-output)"
