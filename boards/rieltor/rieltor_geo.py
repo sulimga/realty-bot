@@ -62,21 +62,13 @@ def _street_options(client, city_id, district_id, street_query, pool: dict, limi
     збираємо кандидатів за короткими початками слів і впорядковуємо за схожістю з CRM."""
     nq = _normalize_street(street_query)
     words = [w for w in re.split(r"[\s\-]+", nq) if len(w) > 2]
-    for q in {nq[:4], *[w[:4] for w in words if len(w) >= 4]}:
-        if not q:
-            continue
+    # порожній запит віддає перелік вулиць населеного пункту (видно в HAR rieltor.ua) — беремо його завжди
+    for q in ["", nq[:4], *sorted({w[:4] for w in words if len(w) >= 4})]:
         try:
             for c in client.search_streets(q, city_id, district_id):
                 pool.setdefault(c.get("streetId"), c)
         except Exception:
             pass
-    if not pool:
-        try:                                     # інколи порожній запит повертає перелік вулиць міста
-            for c in client.search_streets("", city_id, district_id):
-                pool.setdefault(c.get("streetId"), c)
-        except Exception:
-            pass
-
     def score(c):
         n = _normalize_street(c.get("name"))
         best = difflib.SequenceMatcher(None, nq, n).ratio()
