@@ -207,7 +207,10 @@ URL-патерн і інший cookie, ніж публічна презента�
   version:"v2"} → `POST /billing/invoice/makeInvoice/` {paymentTypeId:99 (з рахунку; картку не обрано), cardId:null, services:[…],
   langId:4, platform:"web", is_mobile:false, GPayData/APayData — заглушки як у формі}. Не вистачає на рахунку — не платимо, лишаємо
   чернетку. Успіх = рахунок зменшився на ціну; посилання на оплату у відповіді — віддаємо людині.
-  ⚠️ Відповідей оплати в HAR не було (sanitized) — перший живий запуск покаже формат; усе в `domria/logs/*make_invoice*`.
+  Живий тест 12.11.2026 — оплата пройшла. Формати: paymentInfoByServices → {"status":"ok","payOnlyPromo":false,"promo":{type 2099,
+  "Промо рахунок",balance,available},"paymentTypes":[{"type":4006,"label":"Рахунок Агентства","balance","available"},{"type":99,…}]}
+  — бот бере доступний тип 99 (або перший доступний) і пише в чат, з якого рахунку платить; makeInvoice → {"status":"ok","message":"",
+  "orderId":357036842,"billingUrl":""} (порожній billingUrl = оплачено з рахунку; непорожній — посилання на оплату, віддаємо людині).
   Чи serviceId 155 однаковий для всіх категорій — не перевірено.
 - realty_sale_type = 1 завжди. Стіни: WALL_ALIASES (газоблок↔газобетон), дефолт цегла.
 - Таймаути 40 с, повтори лише для GET.
