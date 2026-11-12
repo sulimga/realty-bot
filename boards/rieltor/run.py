@@ -122,6 +122,12 @@ def resolve_missing(payload, client, crm, no_ask):
                     break
                 bp.info("Загальна площа має бути не меншою за суму житлової і кухні — введіть ще раз")
             payload["commonArea"], payload["usefulArea"], payload["kitchenArea"] = (R._fmt_area(x) for x in vals)
+        elif kind == "text":
+            v = bp.ask_text(f"{label}. Вкажіть, наприклад 1 або 12а")
+            if not v or not v.strip():
+                bp.result(False, f"rieltor: без поля «{label}» не опублікувати — скасовано")
+                return False
+            payload[key] = v.strip()[:20]
         elif kind == "district":
             opts = [(d["districtId"], d["name"]) for d in m.get("options") or []]
             if not opts and payload.get("cityId"):

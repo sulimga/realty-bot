@@ -613,6 +613,11 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
     else:
         payload["_missing"] = fill_other(payload, item_type, geo)
 
+    if not geo.get("matched") and not payload.get("houseNameUnfound") and not payload.get("houseId"):
+        # адреса вільним текстом: rieltor.ua приймає лише з номером будинку (HAR 12.11.2026), порожній -> renta_address_invalid
+        payload["_missing"] = (payload.get("_missing") or []) + [
+            {"key": "houseNameUnfound", "kind": "text",
+             "label": "Номер будинку (вулиці немає в довіднику rieltor.ua — сайт вимагає номер)"}]
     payload["_street_options"] = None if geo.get("matched") else geo.get("street_options")
     payload["_geo_debug"] = geo  # діагностика, прибрати перед реальною відправкою
     payload["_parsed_address"] = addr
