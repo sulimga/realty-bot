@@ -33,7 +33,8 @@ import requests
 
 from extract_estate import fetch_estate_data, extract_estate_data, HEADERS as CRM_HEADERS
 from domria_client import DomRiaClient, DomRiaError, AuthError, _now_iso, PARTNER_ID
-from mapping import (detect_deal, build_characteristics, describe, PARENT_BY_TYPE,
+from mapping import (commercial_kind, COMMERCIAL_RT, COMMERCIAL_CHOICES, CHARS as _CHARS,
+                     detect_deal, build_characteristics, describe, PARENT_BY_TYPE,
                      TYPE_NAMES, dict_for)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -466,8 +467,34 @@ def build_listing(client, estate, cfg, street=None, house=None, asker=None):
     op, rt = detect_deal(estate.get("deal_title", ""))
     if not rt:
         raise DomRiaError(f"Не зміг визначити тип об'єкта з «{estate.get('deal_title')}»")
+    kind = None
+    if rt in COMMERCIAL_RT:
+        # тип на dom.ria ≠ тип у CRM: офіс → «Офісне приміщення» (11), ціла будівля → «Комерційне приміщення» (21)
+        # + «будівля / комплекс», кафе/СТО/салон → «Спеціальне приміщення» (18) + сфера (12.11.2026)
+        rt2, obj, sphere, why, sure = commercial_kind(estate, rt)
+        if not sure and asker is not None and getattr(asker, "enabled", False):
+            guess = next((i for i, c in enumerate(COMMERCIAL_CHOICES) if c[:3] == (rt2, obj, sphere)), None)
+            order = ([guess] if guess is not None else []) + [i for i in range(len(COMMERCIAL_CHOICES)) if i != guess]
+            opts = [(i, COMMERCIAL_CHOICES[i][3] + (" ← бот вважає так" if i == guess else "")) for i in order]
+            k, v = asker.choose(opts, f"dom.ria: який це тип комерції? (CRM: «{estate.get('deal_title')}», "
+                                      f"бот здогадався {why})")
+            if k == "opt":
+                rt2, obj, sphere = COMMERCIAL_CHOICES[v][:3]
+                why = "обрано вручну"
+        rt = rt2
+        kind = (obj, sphere, why)
     parent = PARENT_BY_TYPE[rt]
     cv, warnings, dkey, leftovers, unmatched = build_characteristics(estate, rt, op, cfg)
+    if kind:
+        obj, sphere, why = kind
+        cv["169"] = obj
+        d = _CHARS.get(dkey) or {}
+        if sphere and "199" in d:
+            cv["199"] = sphere
+        if obj == 166 and "227" in d and not cv.get("227"):
+            cv["227"] = 1                     # ціла будівля: «поверх» = 1 (так ставить і форма, HAR 12.11.2026)
+        olabel = ((d.get("169") or {}).get("o") or {}).get(str(obj), obj)
+        print(f"      dom.ria: тип «{TYPE_NAMES.get(rt, rt)}», тип об'єкта «{olabel}» ({why})")
     geo = resolve_geo(client, estate, parent, street, house, asker)
 
     desc = (estate.get("description") or "").strip()

@@ -300,6 +300,28 @@ class DomRiaClient:
                         headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=30)
         return self._json(r, "check_main_characteristics", payload)
 
+    # ------------------------------------------------------------ платна публікація (HAR 12.11.2026)
+    PUBLICATION_SERVICE_ID = 155          # послуга «публікація» (75 грн за оголошення, період 1)
+    PAY_FROM_ACCOUNT = 99                 # paymentTypeId із форми, коли картку не обрано (оплата з рахунку dom.ria)
+
+    def payment_info(self, realty_id, price, service_id=PUBLICATION_SERVICE_ID):
+        payload = {"services": [{"serviceId": service_id, "realtyId": int(realty_id), "level": 0, "period": 1,
+                                 "price": price}], "version": "v2"}
+        r = self.s.post(BASE + "/billing/user/paymentInfoByServices/", json=payload,
+                        headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=40)
+        return self._json(r, "payment_info", payload)
+
+    def make_invoice(self, realty_id, service_id=PUBLICATION_SERVICE_ID, payment_type_id=PAY_FROM_ACCOUNT):
+        """Те саме, що кнопка «Оплатити» на кроці оплати форми. ПЛАТНО — викликати лише після згоди людини."""
+        payload = {"paymentTypeId": payment_type_id, "cardId": None,
+                   "services": [{"serviceId": service_id, "realtyId": int(realty_id), "level": 0, "period": 1}],
+                   "langId": LANG_UK, "platform": "web", "is_mobile": False,
+                   "GPayData": {"payment_type_id": 127, "paymentTokenGPay": {}},
+                   "APayData": {"payment_type_id": 0, "paymentData": {}}}
+        r = self.s.post(BASE + "/billing/invoice/makeInvoice/", json=payload,
+                        headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=60)
+        return self._json(r, "make_invoice", payload)
+
     def publication_price(self, realty_id):
         r = self.s.get(f"{BASE}/v1/api/payments/get-publication-price/{realty_id}",
                        headers=self._h("/v2/new_design/uk/add_form/payment?onSite=0"), timeout=40)

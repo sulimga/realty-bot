@@ -197,12 +197,81 @@ def cmd_post(a):
             pass
     rid = report.get("realty_id")
     url = f"https://dom.ria.com/uk/{_last['beautiful_url']}" if _last["beautiful_url"] else None
+    if getattr(a, "paid", False) and not a.techpassport and rid:
+        return pay_publication(cfg, rid, url)
     if a.techpassport:
         bp.result(True, f"dom.ria: опубліковано (№ {rid}), техпаспорт на перевірці", url=url, id=rid)
     else:
         bp.result(True, f"dom.ria: чернетку створено (№ {rid}). Опублікувати: додайте техпаспорт "
                         f"у кабінеті dom.ria",
                   url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
+
+
+def _num(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def pay_publication(cfg, rid, url):
+    """
+    Платна публікація чернетки (кнопка «💳 Опублікувати платно» в боті). Кроки — як у формі dom.ria (HAR 12.11.2026):
+    ціна (/v1/api/payments/get-publication-price/<id> → число, напр. 75) → підтвердження людиною з ціною і залишком
+    рахунку → /billing/user/paymentInfoByServices/ → /billing/invoice/makeInvoice/ (paymentTypeId 99 — з рахунку).
+    Відповіді оплати в HAR не було → успіх перевіряємо тим, що рахунок зменшився; усе пишеться в logs/.
+    """
+    client = P.make_client(cfg)
+    draft_msg = (f"dom.ria: чернетку створено (№ {rid}), НЕ оплачено. Опублікувати можна в кабінеті dom.ria "
+                 f"(«Мої оголошення» → чернетки).")
+    price_raw = client.publication_price(rid)
+    price = _num(price_raw) if not isinstance(price_raw, dict) else _num(price_raw.get("price") or price_raw.get("data"))
+    if not price or price <= 0:
+        return bp.result(False, f"{draft_msg}\nНе зрозумів ціну публікації від dom.ria: {str(price_raw)[:200]}",
+                         url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
+    bal = client.check_auth() or {}
+    account = _num(bal.get("account")) if isinstance(bal, dict) else None
+    promo = _num(bal.get("promo")) if isinstance(bal, dict) else None
+    price_s = f"{price:g} грн"
+    money = (f"На рахунку dom.ria: {account:g} грн" if account is not None else "Залишок рахунку невідомий") + \
+            (f" (+ бонусні {promo:g})" if promo else "")
+    if account is not None and account + (promo or 0) < price:
+        return bp.result(False, f"{draft_msg}\nНа рахунку не вистачає для платної публікації: треба {price_s}. {money}. "
+                                f"Поповніть рахунок dom.ria і опублікуйте чернетку в кабінеті.",
+                         url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
+    kind, ans = bp.ask_choice(f"💳 Платна публікація на dom.ria: {price_s} (спишеться з рахунку dom.ria).\n{money}.\n"
+                              f"Оплатити й опублікувати оголошення № {rid}?",
+                              [("pay", f"💳 Оплатити {price_s}"), ("no", "Лишити чернеткою")])
+    if ans != "pay":
+        return bp.result(True, draft_msg, url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
+    info = client.payment_info(rid, int(price) if float(price).is_integer() else price)
+    print("      dom.ria (інформація про оплату):", str(info)[:300])
+    inv = client.make_invoice(rid)
+    print("      dom.ria (рахунок):", str(inv)[:300])
+    # якщо dom.ria повертає посилання на оплату карткою — віддаємо його людині
+    link = None
+    if isinstance(inv, dict):
+        srcs = [inv] + ([inv["data"]] if isinstance(inv.get("data"), dict) else [])
+        for src in srcs:
+            for k in ("url", "link", "redirect", "redirectUrl", "redirect_url", "checkoutUrl", "paymentUrl", "payment_url"):
+                v = src.get(k)
+                if isinstance(v, str) and v.startswith("http") and not link:
+                    link = v
+    if link:
+        return bp.result(False, f"dom.ria просить оплатити за посиланням (з рахунку не списалось): {link}\n"
+                                f"Оголошення № {rid} лишається чернеткою до оплати.", url=link, id=rid, draft=True)
+    bal2 = client.check_auth() or {}
+    acc2 = _num(bal2.get("account")) if isinstance(bal2, dict) else None
+    promo2 = _num(bal2.get("promo")) if isinstance(bal2, dict) else None
+    spent = None
+    if account is not None and acc2 is not None:
+        spent = (account - acc2) + ((promo or 0) - (promo2 or 0))
+    if spent is not None and spent >= price - 0.01:
+        return bp.result(True, f"dom.ria: оплачено {price_s} й опубліковано (№ {rid}). Залишок рахунку: {acc2:g} грн",
+                         url=url or "https://dom.ria.com/v/uk/mypage", id=rid)
+    return bp.result(False, f"dom.ria: оплату відправлено, але списання не видно (рахунок був {account}, став {acc2}). "
+                            f"Перевірте оголошення № {rid} у кабінеті dom.ria. Відповідь dom.ria: {str(inv)[:300]}",
+                     url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
 
 
 def cmd_techpassport(a):
@@ -225,6 +294,7 @@ def main():
     p = sub.add_parser("post")
     p.add_argument("--url", required=True)
     p.add_argument("--techpassport", nargs="*", default=[])
+    p.add_argument("--paid", action="store_true")      # без техпаспорта: після чернетки — платна публікація (з підтвердженням)
     t = sub.add_parser("techpassport")
     t.add_argument("--realty-id", required=True)
     t.add_argument("files", nargs="+")
