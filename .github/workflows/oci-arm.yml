@@ -1,0 +1,90 @@
+# Спроби створити безкоштовну ARM-машину Oracle (Ampere A1) під переїзд мультибота — кожні 10 хв, поки не вийде.
+# Скрипт — deploy/oci-create-arm.sh (той самий, що в Cloud Shell). Щойно машина є: повідомлення в Telegram (якщо задані
+# TG_TOKEN/TG_CHAT) і цей розклад вимикає сам себе (Actions → цей workflow → Enable, щоб увімкнути знову).
+#
+# Секрети репозиторію (Settings → Secrets and variables → Actions):
+#   OCI_CONFIG — текст «Configuration file preview» з Oracle (Profile → API keys → Add API key), як є
+#   OCI_KEY    — вміст завантаженого приватного ключа API (*.pem), як є
+#   TG_TOKEN, TG_CHAT — необов'язково: токен бота і твій chat id (команда /id у боті) — для повідомлення про успіх
+# Без OCI_CONFIG/OCI_KEY запуск просто пропускається. Репозиторій публічний: IP і OCID у журналі маскуються.
+name: Oracle ARM — спроби створити машину
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: oci-arm
+  cancel-in-progress: false
+
+jobs:
+  try:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Чи є ключі Oracle
+        id: chk
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+        run: |
+          if [ -n "$OCI_CONFIG" ] && [ -n "$OCI_KEY" ]; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "Немає секретів OCI_CONFIG / OCI_KEY — пропускаю."
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.chk.outputs.ok == '1'
+
+      - name: OCI CLI
+        if: steps.chk.outputs.ok == '1'
+        run: pipx install oci-cli >/dev/null 2>&1 || pip install --user -q oci-cli
+
+      - name: Доступ до Oracle
+        if: steps.chk.outputs.ok == '1'
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+        run: |
+          mkdir -p ~/.oci && chmod 700 ~/.oci
+          printf '%s\n' "$OCI_KEY" | tr -d '\r' > ~/.oci/key.pem
+          printf '%s\n' "$OCI_CONFIG" | tr -d '\r' | grep -v '^[[:space:]]*key_file' > ~/.oci/config
+          echo "key_file=$HOME/.oci/key.pem" >> ~/.oci/config
+          chmod 600 ~/.oci/key.pem ~/.oci/config
+          for k in user tenancy fingerprint; do
+            v="$(grep "^[[:space:]]*$k[[:space:]]*=" ~/.oci/config | head -1 | cut -d= -f2- | tr -d ' ')"
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done
+          T="$(grep '^[[:space:]]*tenancy[[:space:]]*=' ~/.oci/config | head -1 | cut -d= -f2- | tr -d ' ')"
+          [ -n "$T" ] || { echo "❌ У OCI_CONFIG немає рядка tenancy=…"; exit 1; }
+          echo "OCI_TENANCY=$T" >> "$GITHUB_ENV"
+          echo "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" >> "$GITHUB_ENV"
+
+      - name: Спроба створити машину
+        id: try
+        if: steps.chk.outputs.ok == '1'
+        env:
+          SSH_PUBKEY_FILE: deploy/realty_arm.pub
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          set +e
+          bash deploy/oci-create-arm.sh
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # 2 = «немає потужностей» — звичайна ситуація, не помилка
+          [ "$rc" = 1 ] && exit 1 || exit 0
+
+      - name: Машина є — вимикаю розклад
+        if: steps.try.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow disable "${{ github.workflow }}" --repo "${{ github.repository }}"
