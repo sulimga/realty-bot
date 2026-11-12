@@ -362,7 +362,19 @@ def main():
     if os.path.exists(state_path("done")):
         log("машину вже створено (є позначка done) — нічого не роблю")
         return 0
-    return Hunter(Oracle()).run()
+    warned = 0
+    while True:                     # вхід в Oracle як сервер (instance principal) — без нього пошук неможливий
+        try:
+            oracle = Oracle()
+            break
+        except Exception as e:  # noqa: BLE001
+            st, code, msg = err_info(e)
+            log("не вдалося увійти в Oracle як сервер:", code, msg)
+            if time.time() - warned > 6 * 3600:
+                warned = time.time()
+                notify(f"⚠️ Пошук ARM-машини: сервер не може увійти в Oracle ({code}: {msg[:200]}). Пробую раз на 10 хв.")
+            time.sleep(600)
+    return Hunter(oracle).run()
 
 
 if __name__ == "__main__":
