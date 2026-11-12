@@ -189,6 +189,19 @@ def cmd_post(a):
     payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False,
                               item_type_override=item_type_override, address_override=address_override)
 
+    # Вулицю з CRM rieltor.ua не впізнав — пропонуємо схожі з довідника (як у постингу dom.ria)
+    opts = payload.get("_street_options")
+    if opts and not a.no_ask:
+        street_txt = R.strip_street_prefix((payload.get("_parsed_address") or {}).get("street") or "")
+        k, v = bp.ask_choice(f"Вулицю «{street_txt}» не знайдено на rieltor.ua. Схожі вулиці населеного пункту:",
+                             [(i, o["name"]) for i, o in enumerate(opts)] + [("none", "Жодна не підходить")])
+        if k == "opt" and v != "none":
+            address_override = dict(address_override or {}, street_item=opts[int(v)])
+            payload = R.build_payload(crm, client, cookie=cookie, upload_photos_flag=False,
+                                      item_type_override=item_type_override, address_override=address_override)
+            if payload.get("_street_options"):
+                bp.info("Вибрану вулицю прийнято, але повної адреси ще немає — спробуйте «Змінити адресу» (будинок)")
+
     # Продаж ділянки без кадастрового номера в описі CRM — не питаємо, одразу пропускаємо
     # (при масовому завантаженні землі нема часу перевіряти кожен об'єкт вручну)
     if payload.get("itemType") == 5 and payload.get("operType") == 1 and not payload.get("cadastralNumber"):

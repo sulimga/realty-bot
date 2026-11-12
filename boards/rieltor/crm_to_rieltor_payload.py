@@ -582,6 +582,7 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
             fix_district=(item_type == 1),
             district_id_override=ov.get("district_id"),
             require_house=(item_type in (1, 2)),
+            street_override=ov.get("street_item"),
         )
 
     if geo.get("matched"):
@@ -612,6 +613,7 @@ def build_payload(crm: dict, geo_client: RieltorGeoClient | None, cookie: str | 
     else:
         payload["_missing"] = fill_other(payload, item_type, geo)
 
+    payload["_street_options"] = None if geo.get("matched") else geo.get("street_options")
     payload["_geo_debug"] = geo  # діагностика, прибрати перед реальною відправкою
     payload["_parsed_address"] = addr
 
