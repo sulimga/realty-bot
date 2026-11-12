@@ -1157,6 +1157,28 @@ async def cmd_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                reply_markup=MENU)
 
 
+async def cmd_armhunt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Пошук вільної ARM-машини Oracle з цього сервера (deploy/setup-arm-hunt.sh, служба realty-armhunt).
+    /armhunt — запустити (повторно — безпечно), /armhunt status — стан, /armhunt stop — зупинити. Лише головний бот."""
+    if not is_owner(update):
+        return
+    action = (ctx.args[0].lower() if ctx.args else "start")
+    if action not in ("start", "status", "stop"):
+        return await update.message.reply_text("/armhunt — запустити пошук · /armhunt status — стан · /armhunt stop — зупинити")
+    if ctx.application.bot_data.get("busy"):
+        return await update.message.reply_text("Зачекайте, іде інша дія.")
+    ctx.application.bot_data["busy"] = True
+    chat_id = update.effective_chat.id
+    try:
+        rc = await run_root_script(ctx, chat_id, "🔎 <b>Пошук ARM-машини Oracle</b>",
+                                   [os.path.join(ROOT, "deploy", "setup-arm-hunt.sh"), action])
+    finally:
+        ctx.application.bot_data["busy"] = False
+    if action == "start":
+        await ctx.bot.send_message(chat_id, "✅ Пошук працює сам. Коли машину створено — напишу сюди. Стан: /armhunt status"
+                                   if rc == 0 else "❌ Не запустилось — причина в повідомленні вище.", reply_markup=MENU)
+
+
 async def cmd_delbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
@@ -1589,6 +1611,7 @@ def main():
         app.add_handler(CommandHandler("bots", cmd_bots))
         app.add_handler(CommandHandler("delbot", cmd_delbot))
         app.add_handler(CommandHandler("callback", cmd_callback))
+        app.add_handler(CommandHandler("armhunt", cmd_armhunt))
         app.add_handler(CommandHandler("olxapp", cmd_olxapp))
         app.add_handler(CommandHandler("olxprobe", cmd_olxprobe))
     app.add_handler(CallbackQueryHandler(on_callback))

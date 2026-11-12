@@ -78,7 +78,17 @@ OLX ще `post --dry-run`).
   (кожні 10 хв; секрети OCI_CONFIG — «Configuration file preview» API-ключа, OCI_KEY — приватний ключ API, необов'язково TG_TOKEN/TG_CHAT
   для повідомлення; публічний ключ `deploy/realty_arm.pub` = пара з Cloud Shell; IP/OCID у журналі маскуються; після успіху розклад
   вимикається сам). Скрипт пробує всі 3 AD і два розміри (2 і 1 OCPU), `--no-retry`; коди: 0 є/створено, 2 немає потужностей, 1 помилка.
-  11–12.11 — понад 40 спроб, усюди «Out of host capacity». Cloud Shell сам закривається без активності (~20–60 хв).
+  11–12.11 — понад 50 спроб, усюди «Out of host capacity». Cloud Shell сам закривається без активності (~20–60 хв).
+  Місце звільняється випадково (хтось видалив машину / Oracle додав залізо): від годин до тижнів, Франкфурт — один із найзабитіших.
+  **Пошук з нашого сервера (12.11.2026, основний спосіб):** тестовий сервер `realty-bot` сам пробує раз на ~1,5 хв (3 AD × 2 розміри) —
+  служба `realty-armhunt` (`deploy/arm_hunt.py`, OCI Python SDK у `/opt/realty-armhunt`, стан `/var/lib/realty-armhunt/state.json`,
+  позначка `done`), запуск/стан/стоп — команда тестового бота `/armhunt` · `/armhunt status` · `/armhunt stop` (`deploy/setup-arm-hunt.sh`,
+  root через `sudo -n`; спершу `--check` — права, AD, диски, підмережа, образ). Ключів API немає: сервер входить в Oracle як
+  instance principal — у Cloud Shell створено динамічну групу `realty-arm-hunter` (лише машина realty-bot) і політику `realty-arm-hunter`
+  (manage instance-family БЕЗ `INSTANCE_DELETE`, use virtual-network-family, use volume-family, inspect compartments; tenancy з identity
+  domains, група — в домені Default). Коли машину створено — повідомлення власнику в тестовий бот (токен з `/etc/realty-bot.env`) і
+  служба зупиняється сама. **Після створення — видалити політику і динамічну групу `realty-arm-hunter`** (Identity → Policies /
+  Domains → Default → Dynamic groups). GitHub Actions `oci-arm.yml` вимкнено (секрети не додавались — не потрібні).
   Запасні варіанти: Pay As You Go (Always Free лишається безкоштовним; при переході блокування $100 на картці; інші ліміти потужностей,
   без гарантії) або VPS: OVH VPS-1 (2 vCore/4 ГБ/40 ГБ, ~€4,5/міс, Франкфурт), Contabo Cloud VPS 4 (4/8 ГБ, €6,6/міс); Hetzner CX/CAX
   з вересня 2026 не продається. Перед переїздом на нову IP — перевірити доступ до rieltor/dom.ria; змінити callback URL застосунку OLX.
@@ -101,6 +111,7 @@ OLX ще `post --dry-run`).
 /cancel зупиняє програму сайту, що працює зараз (kill процесу, dispatcher.cancel_all), і не запускає наступні сайти; пакет rieltor зупиняється одразу.
 Команди: /start (перший — стає власником), /cancel, /update, /logs, /status, /id;
 лише в головному боті — /newbot, /bots, /delbot (слоти, розділ 3).
+Тимчасово в тестовому боті: `/armhunt` (`status` / `stop`) — сервер сам шукає вільну ARM-машину Oracle (розділ 3).
 
 **Викласти оголошення:** спершу вибір сайтів →
 - лише rieltor: можна одне посилання, кілька (кома/рядки) або .txt → **пакет**: у фоні по черзі
