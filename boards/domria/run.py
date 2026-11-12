@@ -245,15 +245,35 @@ def pay_publication(cfg, rid, url):
     if ans != "pay":
         return bp.result(True, draft_msg, url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
     info = client.payment_info(rid, int(price) if float(price).is_integer() else price)
-    print("      dom.ria (інформація про оплату):", str(info)[:300])
-    inv = client.make_invoice(rid)
-    print("      dom.ria (рахунок):", str(inv)[:300])
+    # info (12.11.2026): {"status":"ok","payOnlyPromo":false,"promo":{type 2099,…},"paymentTypes":[{"type":4006,
+    # "label":"Рахунок Агентства","balance":0,"available":false}, {"type":99, …}]} — повністю лежить у logs/
+    ptype = client.PAY_FROM_ACCOUNT
+    types = info.get("paymentTypes") if isinstance(info, dict) else None
+    if isinstance(types, list) and types:
+        avail = [t for t in types if isinstance(t, dict) and t.get("available") and not t.get("disabled")]
+        own = next((t for t in avail if t.get("type") == client.PAY_FROM_ACCOUNT), None) or (avail[0] if avail else None)
+        if not own:
+            return bp.result(False, f"{draft_msg}\ndom.ria не пропонує, з чого оплатити (рахунки: " +
+                             ", ".join(f"{t.get('label')} — {t.get('balance')} грн" for t in types if isinstance(t, dict)) +
+                             "). Опублікуйте чернетку в кабінеті.", url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
+        ptype = own.get("type", ptype)
+        print(f"      Оплата з: {own.get('label') or 'рахунок dom.ria'}"
+              + (f" (на ньому {own.get('balance')} грн)" if own.get("balance") is not None else ""))
+    inv = client.make_invoice(rid, payment_type_id=ptype)
+    # inv (12.11.2026): {"status":"ok","message":"","orderId":357036842,"billingUrl":""} — порожній billingUrl = оплачено з рахунку
+    if isinstance(inv, dict) and inv.get("orderId"):
+        print(f"      Замовлення dom.ria № {inv['orderId']}")
+    if isinstance(inv, dict) and str(inv.get("status", "")).lower() not in ("ok", "success", "true") and not inv.get("billingUrl"):
+        return bp.result(False, f"dom.ria відхилила оплату: {inv.get('message') or str(inv)[:300]}. "
+                                f"Оголошення № {rid} лишається чернеткою.", url="https://dom.ria.com/v/uk/mypage",
+                         id=rid, draft=True)
     # якщо dom.ria повертає посилання на оплату карткою — віддаємо його людині
     link = None
     if isinstance(inv, dict):
         srcs = [inv] + ([inv["data"]] if isinstance(inv.get("data"), dict) else [])
         for src in srcs:
-            for k in ("url", "link", "redirect", "redirectUrl", "redirect_url", "checkoutUrl", "paymentUrl", "payment_url"):
+            for k in ("billingUrl", "url", "link", "redirect", "redirectUrl", "redirect_url", "checkoutUrl", "paymentUrl",
+                      "payment_url"):
                 v = src.get(k)
                 if isinstance(v, str) and v.startswith("http") and not link:
                     link = v
@@ -269,8 +289,10 @@ def pay_publication(cfg, rid, url):
     if spent is not None and spent >= price - 0.01:
         return bp.result(True, f"dom.ria: оплачено {price_s} й опубліковано (№ {rid}). Залишок рахунку: {acc2:g} грн",
                          url=url or "https://dom.ria.com/v/uk/mypage", id=rid)
-    return bp.result(False, f"dom.ria: оплату відправлено, але списання не видно (рахунок був {account}, став {acc2}). "
-                            f"Перевірте оголошення № {rid} у кабінеті dom.ria. Відповідь dom.ria: {str(inv)[:300]}",
+    order = inv.get("orderId") if isinstance(inv, dict) else None
+    return bp.result(True, f"dom.ria: оплату прийнято (замовлення № {order or '?'}), оголошення № {rid}. Списання з "
+                           f"рахунку бот не побачив (було {account}, стало {acc2}) — можливо, оплата пройшла з іншого "
+                           f"рахунку або ще обробляється. Перевірте оголошення в кабінеті dom.ria.",
                      url="https://dom.ria.com/v/uk/mypage", id=rid, draft=True)
 
 
