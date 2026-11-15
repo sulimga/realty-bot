@@ -1021,7 +1021,20 @@ Cloudflare; кнопка «🔄 Перевірити» — один об'єкт 
   (`pw:apply` → список «стара → нова» і «✅ Так, змінити / ✖️ Ні» → `pw:go`) → по черзі `run_board(<сайт>, price …)`.
   Диспетчер після вдалого `price` (не dry-run) записує нову ціну оголошення в реєстр (`set_listing_price`) → сторож більше не
   показує розбіжність. Сайти без `price_cmd` (OLX) — «змініть вручну».
-- Тест без мережі: `python3 boards/pricewatch/test_price_change.py` — 12/12.
+- **Перевірка без запису на живих сайтах (15.11.2026, A22560 — офіс, продаж):** обидва сайти віддають оголошення НЕ у форматі
+  форми. **rieltor** (`GET /api/offers/<id>/` → `{status, data}`): адреса блоками `city/region/district/street/house/newhouse/
+  cottage` = `{value, label, …}` замість `cityId/…`, орієнтири — `[{value, label, isMicrodistrict}]`, фото — `[{imageId, imageKey,
+  …}]`, є `status`, `exclusiveInn/RegNumber`, немає порожніх груп (`groupTitleN/rentaImagesN/descriptionN/videoLinkN`),
+  `ptolemyHouseId`, `osmId`. → `to_form_body()`: блоки → ID (`value`), орієнтири/метро → ID, фото → `imageId`, порожні групи як у
+  формі, `status` (і `exclusiveInn/RegNumber`, якщо не ексклюзив) — не шлемо, `ptolemyHouseId`/`osmId` — None (як при створенні
+  ботом). На справжніх даних тіло рівно як у формі (0 зайвих, 0 відсутніх). Запобіжник `_unsafe()`: фото не ID / жодного фото /
+  немає `cityId` → справжній PUT не йде. **dom.ria** (`getCouchRealtyById`): є `_rev`, стан модерації й публікації
+  (`moderated`, `moderation_date`, `moderator_id`, `return_on_moderation*`, `publishing_date`, `date_end`, `actualized_*`,
+  `advert_publish_type`, `user_package_id`, `verified_statuses`), назви (`district_name*`, `metro_station_name*`), `beautiful_url`,
+  `lf_links*`, `photos`, `rangeFactorIns` — `SERVER_ONLY`, не шлемо; ID (`district_type_id`, `metro_station_id/brunch`,
+  `is_exclusive`) лишаємо; поля квартири (`flat_*`, площі кухні/житлова, `wall_type*`) і `entity_group`/`isSuperUser` у комерції
+  відсутні — це нормально (HAR був з квартири).
+- Тест без мережі: `python3 boards/pricewatch/test_price_change.py` — 17/17 (і вигляд справжнього GET rieltor).
 
 **Далі (по порядку):** живий прогін (спершу «👀 Перевірити без запису» → звіт `/logs` → одна справжня зміна з дозволу власника) →
 OLX (Partner API, в основному боті) → «🙈 Не міняти» / вибір сайтів → розклад сторожа (пізніше) →
