@@ -93,6 +93,13 @@ OLX ще `post --dry-run`).
   без гарантії) або VPS: OVH VPS-1 (2 vCore/4 ГБ/40 ГБ, ~€4,5/міс, Франкфурт), Contabo Cloud VPS 4 (4/8 ГБ, €6,6/міс); Hetzner CX/CAX
   з вересня 2026 не продається. Перед переїздом на нову IP — перевірити доступ до rieltor/dom.ria; змінити callback URL застосунку OLX.
   API-ключ Oracle і секрети GitHub не створювались (пошук іде з сервера без ключів, див. вище).
+- **Google Cloud (15.11.2026) — тимчасовий сервер під переїзд мультибота:** тріал 300 $ на 90 днів (до ≈13.02.2027; потім сервери
+  зупиняються, гроші без підтвердження платного рахунку не списуються). Проєкт «My First Project», VM `realty-multi-gcp`,
+  зона europe-central2-a (Варшава), e2-standard-2 (2 vCPU / 8 ГБ), Ubuntu 24.04 x86, диск 30 ГБ pd-balanced, статична IP `realty-ip`,
+  правило фаєрвола `realty-web` (TCP 80/443, тег `realty-web`) — ≈200 $ за 90 днів. Створено з Google Cloud Shell (`gcloud`, вхід
+  через `gcloud auth login --no-launch-browser`). Перевірка з цієї IP 15.11: rieltor.ua — головна 200, API без cookie
+  `user_not_authorized` (Cloudflare пускає); dom.ria — головна 200, `/v1/api/user/balance` без cookie «not allowed»; OLX Partner API
+  відповідає. Бот там ще НЕ встановлено. Пошук ARM в Oracle (`/armhunt`) іде далі — якщо знайдеться, переїхати на безкоштовну.
 - **Слоти для інших людей** (30.10.2026): на тій самій VM можна запускати окремі копії бота для інших
   людей — свій Telegram-бот, код `/opt/realty-bot-<ім'я>` (свій venv, свій `/update`), дані
   `/var/lib/realty-bot-<ім'я>`, налаштування `/etc/realty-bot-<ім'я>.env` (TELEGRAM_TOKEN, REALTY_DATA_DIR,
