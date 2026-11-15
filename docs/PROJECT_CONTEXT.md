@@ -896,8 +896,10 @@ Cloudflare; кнопка «🔄 Перевірити» — один об'єкт 
 - **dom.ria** (квартира, 35148240): `GET /node/getCouchRealtyById/<id>/` → `POST /node/saveRealty` (той самий, що при створенні)
   з УСІМ об'єктом: `_id: "realty-<id>"`, `realty_id`, `user_id`, `agency_id`, `price`/`price_total` (128000), `price_item`
   (за м²: 128000/51,7 = 2476), `priceArr` {"1": "128 000" ($), "2": "115 100" (€), "3": "5 881 600" (грн)}, `currency_type`,
-  `characteristics_values` (⚠️ «234»: 127000 — схоже, стара ціна; перевірити в characteristics.json, чи 234 = ціна, і чи міняти),
-  `tech_passport` і `free_publicate: 101` лишаються. Перед цим форма шле `savePhotosOrdering` (для ціни не потрібно), після —
+  `characteristics_values`, `tech_passport` і `free_publicate: 101` лишаються.
+  **Нова ціна — лише в характеристиці `234`** (127000 — її власник і поставив; `234`/`235` = ціна, `242`/`246` = валюта за
+  `mapping.SEM`). `price`/`price_total`/`price_item`/`priceArr` форма шле СТАРІ (128000, як завантажила) — сайт рахує їх сам.
+  Отже для зміни: прочитати оголошення → змінити характеристику ціни (234 або 235 — та, що є) → saveRealty; решту — як прочитали. Перед цим форма шле `savePhotosOrdering` (для ціни не потрібно), після —
   `getAggregatedRealtyData`, `levels/position`. Окремого запиту публікації нема → оголошення лишається активним.
   Також бачили: `/v1/api/realty/canUserEditRealty?realtyId=`, `/v1/api/realty/getStatusByPassport/<id>`.
 - **OLX**: Partner API (`PUT /api/partner/adverts/{id}`, ймовірно ціле оголошення — GET → змінити price → PUT; не перевірено).
