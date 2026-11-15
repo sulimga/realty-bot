@@ -549,6 +549,11 @@ OLX уже закрито офіційним API («Дозволити», роз
   лише ОДИН прапорець (Chromium бере останній; збирається в `chrome_flags()`). Ще: `--js-flags=--max-old-space-size=256`, без GPU/
   розширень/синхронізації; `--no-sandbox` (як у Playwright; служба ізольована systemd). Очікування на dom.ria — 350–450 МБ, на 1 ГБ
   можливе підгальмовування на swap. Межа одночасних публікацій `MAX_PARALLEL_JOBS` (env, зараз 0 = без межі) — якщо знадобиться.
+- **Ізоляція сайтів вимкнена ЗАВЖДИ (15.11.2026):** `--disable-site-isolation-trials` + `site-per-process,IsolateOrigins` у
+  `--disable-features` для будь-якої VM. Інакше iframe іншого сайту (капча Google на dom.ria) стає окремим процесом (OOPIF), а
+  `Emulation.setDeviceMetricsOverride` з deviceScaleFactor 2 на нього не діє — капча малювалась обрізаною (лише лівий верхній кут
+  сітки). Відтворено тестом на серверному Chromium (з ізоляцією — обрізано, без — повністю). На малій VM проблеми не було, бо
+  ощадливий режим ізоляцію вже вимикав.
 - Встановлення — адмін `/browser` (`deploy/setup-browser.sh`, root через `sudo -n`, можна повторно): swap 2 ГБ (якщо нема) →
   у venv `aiohttp` + `playwright` (лише як інсталятор) → `playwright install-deps chromium` + шрифти → Chromium у `/opt/realty-chromium`
   (є збірки x86 і ARM/Ampere) → пробний запуск → `setup-callback.sh` (Caddy: `/login/*` → 8098; `encode gzip` лише для `/olx`, `/edit`) →
