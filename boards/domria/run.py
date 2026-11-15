@@ -197,6 +197,10 @@ def cmd_post(a):
             pass
     rid = report.get("realty_id")
     url = f"https://dom.ria.com/uk/{_last['beautiful_url']}" if _last["beautiful_url"] else None
+    # артикул і ціна CRM на момент публікації — у реєстр оголошень (common/registry.py)
+    crm = report.get("crm") or {}
+    _res = bp.result
+    bp.result = lambda ok, text, **kw: _res(ok, text, article=crm.get("article"), crm_price=crm.get("price"), **kw)
     if getattr(a, "paid", False) and not a.techpassport and rid:
         return pay_publication(cfg, rid, url)
     if a.techpassport:

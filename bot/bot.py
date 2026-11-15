@@ -338,7 +338,7 @@ async def run_board(ctx, chat_id, board_key, argv, quiet=False, sent=None):
         return await ask_user(ctx, chat_id, msg)
 
     try:
-        res = await D.run(board_key, argv, on_info, on_ask)
+        res = await D.run(board_key, argv, on_info, on_ask, user=owner_id() or chat_id)
     except Exception as e:  # noqa: BLE001
         log.exception("dispatcher")
         res = {"ok": False, "text": f"{b['title']}: помилка диспетчера {e}"}
@@ -476,6 +476,18 @@ async def cmd_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if os.path.getsize(p) > 0:
             with open(p, "rb") as f:
                 await update.message.reply_document(f, filename=os.path.basename(p))
+
+
+async def cmd_registry(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/registry — що записано в реєстр «об'єкт CRM ↔ оголошення» (основа для зміни цін з CRM)."""
+    if not is_owner(update):
+        return
+    try:
+        text = await asyncio.to_thread(D.registry().stats_text, owner_id())
+    except Exception as e:  # noqa: BLE001
+        log.exception("registry")
+        text = f"Реєстр: помилка {type(e).__name__}: {e}"
+    await update.message.reply_text("📒 Реєстр оголошень\n\n" + text)
 
 
 async def show_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1606,6 +1618,7 @@ def main():
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("status", show_status))
+    app.add_handler(CommandHandler("registry", cmd_registry))
     if not INSTANCE:                           # керування слотами — лише в головному боті
         app.add_handler(CommandHandler("newbot", cmd_newbot))
         app.add_handler(CommandHandler("bots", cmd_bots))

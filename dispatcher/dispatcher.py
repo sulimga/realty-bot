@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import importlib.util
 import json
 import os
 import re
@@ -87,6 +88,28 @@ def journal(entry):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+_REGISTRY_MOD = None
+
+
+def registry():
+    """common/registry.py (реєстр «об'єкт CRM ↔ оголошення»). Вантажимо за шляхом, щоб не додавати common/ у sys.path бота."""
+    global _REGISTRY_MOD
+    if _REGISTRY_MOD is None:
+        spec = importlib.util.spec_from_file_location("realty_registry", os.path.join(ROOT, "common", "registry.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _REGISTRY_MOD = mod
+    return _REGISTRY_MOD
+
+
+def record_in_registry(board_key, argv, result, user=None):
+    """Після публікації — записати оголошення в реєстр. Будь-яка помилка тут не ламає публікацію."""
+    try:
+        registry().record_run(board_key, argv, result, user)
+    except Exception as e:  # noqa: BLE001
+        print(f"[registry] {board_key} {argv[:1]}: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def last_journal(n=10):
     if not os.path.exists(JOURNAL):
         return []
@@ -101,11 +124,12 @@ def last_journal(n=10):
     return out
 
 
-async def run(board_key, argv, on_info, on_ask):
+async def run(board_key, argv, on_info, on_ask, user=None):
     """
     Запускає програму сайту: python <dir>/<entry> <argv...>
       on_info(text)          — корутина, повідомлення про хід роботи
       on_ask(ask_dict) -> answer_dict  — корутина, питання; повертає {"choice": i} / {"text": s} / {}
+      user                   — Telegram ID, від чийого імені запуск (для реєстру оголошень)
     Повертає dict результату: {"ok", "text", "url", "id", "draft"}.
     """
     reg = boards(enabled_only=False)
@@ -199,4 +223,6 @@ async def run(board_key, argv, on_info, on_ask):
     result.setdefault("text", "")
     journal({"board": board_key, "argv": argv, "ok": result.get("ok"), "text": result.get("text"),
              "id": result.get("id"), "url": result.get("url"), "draft": result.get("draft")})
+    if argv and argv[0] in ("post", "techpassport") and result.get("ok"):
+        record_in_registry(board_key, argv, result, user)
     return result

@@ -175,7 +175,8 @@ def cmd_post(a):
     crm = fetch_estate_data(a.url)
     art = (crm.get("article") or "").lstrip("#")
     _res = bp.result
-    bp.result = lambda ok, text, **kw: _res(ok, text, article=crm.get("article"), **kw)   # артикул — у звіт пакета
+    # артикул — у звіт пакета; ціна CRM на момент публікації — у реєстр оголошень (common/registry.py)
+    bp.result = lambda ok, text, **kw: _res(ok, text, article=crm.get("article"), crm_price=crm.get("price"), **kw)
 
     photos = crm.get("photos", [])
     if not photos:

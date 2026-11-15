@@ -574,6 +574,11 @@ def cmd_post(a):
     client = None if (a.dry_run or use_api) else make_client(cfg)
     report = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "url": a.url, "dry_run": a.dry_run,
               "mode": "official_api" if use_api else "site"}
+    # артикул, ціна CRM на момент публікації і спосіб (api/site) — у реєстр оголошень (common/registry.py)
+    _res = bp.result
+    bp.result = lambda ok, text, **kw: _res(ok, text, article=(report.get("crm") or {}).get("article"),
+                                            crm_price=(report.get("crm") or {}).get("price"),
+                                            via="api" if use_api else "site", **kw)
     try:
         if use_api:
             print("OLX: публікація через офіційний доступ")
