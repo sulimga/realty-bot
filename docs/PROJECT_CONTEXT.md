@@ -1030,7 +1030,11 @@ Cloudflare; кнопка «🔄 Перевірити» — один об'єкт 
   `ptolemyHouseId`, `osmId`. → `to_form_body()`: блоки → ID (`value`), орієнтири/метро → ID, фото → `imageId`, порожні групи як у
   формі, `status` (і `exclusiveInn/RegNumber`, якщо не ексклюзив) — не шлемо, `ptolemyHouseId`/`osmId` — None (як при створенні
   ботом). На справжніх даних тіло рівно як у формі (0 зайвих, 0 відсутніх). Запобіжник `_unsafe()`: фото не ID / жодного фото /
-  немає `cityId` → справжній PUT не йде. **dom.ria** (`getCouchRealtyById`): є `_rev`, стан модерації й публікації
+  немає `cityId` → справжній PUT не йде. `payCommission`: GET віддає 0, а PUT 0 не приймає («Вкажіть відсоток комісії від 0.5 до 50
+  або залиште поле порожнім», перша справжня зміна 15.11) → шлемо null, як кабінет у HAR.
+  **Перша справжня зміна (15.11.2026, A22560):** dom.ria 35151160 — 470 000 → 465 000 ✅ (перевірено повторним читанням);
+  rieltor 13224942 — відмова через `payCommission` (оголошення не змінилось) → виправлено.
+  **dom.ria** (`getCouchRealtyById`): є `_rev`, стан модерації й публікації
   (`moderated`, `moderation_date`, `moderator_id`, `return_on_moderation*`, `publishing_date`, `date_end`, `actualized_*`,
   `advert_publish_type`, `user_package_id`, `verified_statuses`), назви (`district_name*`, `metro_station_name*`), `beautiful_url`,
   `lf_links*`, `photos`, `rangeFactorIns` — `SERVER_ONLY`, не шлемо; ID (`district_type_id`, `metro_station_id/brunch`,
