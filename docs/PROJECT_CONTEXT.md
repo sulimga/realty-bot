@@ -234,7 +234,11 @@ URL-патерн і інший cookie, ніж публічна презента�
 - **Зміна ціни** (HAR 15.11.2026): `GET /node/getCouchRealtyById/<id>/` → `POST /node/saveRealty` (ціле оголошення) — розділ 12.
 - **401/403 (15.11.2026):** бот більше не пише просто «cookie застаріли» — показує відповідь сайту (JSON `msg` або заголовок
   сторінки + `server`) і окремо підказує, якщо це схоже на блокування захистом сайту (Cloudflare тощо). Привід: тестовий сервер
-  (Oracle) — 403 на `saveRealty` (крок geo) зі свіжими cookie з Chrome, хоча перевірка входу (баланс) пройшла; причину з'ясовуємо.
+  (Oracle) — 403 на `saveRealty` (крок geo) зі свіжими cookie з Chrome, хоча перевірка входу (баланс) пройшла. Відповідь dom.ria:
+  `You not allowed to do this action` (JSON, не Cloudflare) → найімовірніше, cookie від ІНШОГО акаунта, ніж `user_id` у
+  `domria/config.json` (у власника два акаунти dom.ria; у HAR з Chrome 15.11 — № 9252610). Баланс dom.ria ID акаунта не віддає
+  (`{account, promo, …}`), тому бот сам не бачить невідповідності. Тепер: після нового входу (`check`, relink) бот питає «від якого
+  акаунта публікувати? Записано № X» [✅ Так / ✏️ Інший — введу ID]; у помилці 401/403 показує, від якого № публікував.
 - Авторизація: cookie. Створення: `/node/saveRealty` (→ realty_id, beautiful_url), фото
   `8.riastatic.com/upload/v4/` (з 11.2026; раніше 9.riastatic — перестав відповідати; у коді список хостів із запасним) + `/node/savePhotosOrdering/`.
 - Техпаспорт: `/uploadfile/` (entity_type=techpassport) → `/v1/api/inspections/sendRealtyDataAndCreateInspectionOrder/`
