@@ -99,7 +99,22 @@ OLX ще `post --dry-run`).
   правило фаєрвола `realty-web` (TCP 80/443, тег `realty-web`) — ≈200 $ за 90 днів. Створено з Google Cloud Shell (`gcloud`, вхід
   через `gcloud auth login --no-launch-browser`). Перевірка з цієї IP 15.11: rieltor.ua — головна 200, API без cookie
   `user_not_authorized` (Cloudflare пускає); dom.ria — головна 200, `/v1/api/user/balance` без cookie «not allowed»; OLX Partner API
-  відповідає. Бот там ще НЕ встановлено. Пошук ARM в Oracle (`/armhunt`) іде далі — якщо знайдеться, переїхати на безкоштовну.
+  відповідає. Пошук ARM в Oracle (`/armhunt`) іде далі — якщо знайдеться, переїхати на безкоштовну (до кінця тріалу).
+  **15.11.2026 МУЛЬТИБОТ ПЕРЕЇХАВ СЮДИ** (простій ≈5 хв): код `/opt/realty-multi` (git через `~ubuntu/.git-credentials` — токен лише
+  для читання, скопійовано зі старого сервера), дані `/var/lib/realty-multi`, `/etc/realty-multi.env`, `/var/lib/realty-oauth`
+  (`olx_app.json`), користувач `ubuntu` з sudo без пароля (як на Oracle), swap 2 ГБ, часовий пояс Київ. Служби: `realty-multi`,
+  `realty-callback`, `realty-browser` (3 одночасні входи), Caddy з адресою `https://<IP-з-дефісами>.sslip.io` (`/olx`, `/edit`, `/login`).
+  Як переносили: на новому сервері ключ `/root/.ssh/migrate_key`; у мультиботі адмін-команда `/migrate <IP нового>` /
+  `/migrate off` (`deploy/migrate-allow.sh`: ключ нового сервера в `~ubuntu/.ssh/authorized_keys` старого, лише з його IP); далі з
+  Google Cloud Shell: `gcloud compute ssh realty-multi-gcp --command 'sudo bash -s <крок> <IP старого>' < ~/migrate.sh` — кроки
+  check → sync (rsync через `sudo rsync`, без `.venv`) → install (venv, pip, unit) → stopold → sync → start → `setup-browser.sh` →
+  stopold-web. Секрети йшли сервер→сервер, не через чат/GitHub.
+  **Старий Oracle `realty-multi`:** VM працює, але служби `realty-multi`, `realty-callback`, `realty-browser`, `caddy` зупинені й
+  вимкнені (дані на місці — запасний варіант відкату). Ключ переїзду (`realty-migrate`) ще в його `authorized_keys` — прибрати
+  (`sed -i '/realty-migrate/d' ~ubuntu/.ssh/authorized_keys`) перед видаленням/повторним використанням VM. Telegram-бот той самий
+  (токен переїхав) — НЕ запускати старий одночасно з новим.
+  ⚠️ Після переїзду: у застосунку OLX (developer.olx.ua → RealtyPosterBot) змінити URI зворотного виклику на нову адресу
+  `https://<IP-з-дефісами>.sslip.io/olx/callback`, інакше нові підключення OLX не працюватимуть (наявні токени оновлюються й так).
 - **Слоти для інших людей** (30.10.2026): на тій самій VM можна запускати окремі копії бота для інших
   людей — свій Telegram-бот, код `/opt/realty-bot-<ім'я>` (свій venv, свій `/update`), дані
   `/var/lib/realty-bot-<ім'я>`, налаштування `/etc/realty-bot-<ім'я>.env` (TELEGRAM_TOKEN, REALTY_DATA_DIR,
