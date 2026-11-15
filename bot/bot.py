@@ -1185,6 +1185,70 @@ async def cmd_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                reply_markup=MENU)
 
 
+SWITCH_KEY = os.path.expanduser("~/.ssh/realty_multi_deploy")
+SWITCH_SSH_HOST = """
+Host github-realty-multi
+  HostName ssh.github.com
+  Port 443
+  User git
+  IdentityFile {key}
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+"""
+
+
+async def cmd_switchrepo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Разове перемикання тестового бота на приватний realty-bot-multi, гілка test (15.11.2026).
+    /switchrepo — створити ключ доступу (лише читання) і показати його відкриту частину для GitHub → Deploy keys.
+    /switchrepo go — перевірити доступ і перемкнути код (deploy/switch-to-multi.sh; при помилці — назад)."""
+    if not is_owner(update):
+        return
+    chat_id = update.effective_chat.id
+    go = bool(ctx.args) and ctx.args[0].lower() == "go"
+    try:
+        os.makedirs(os.path.dirname(SWITCH_KEY), mode=0o700, exist_ok=True)
+        if not os.path.exists(SWITCH_KEY):
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "realty-test-bot",
+                            "-f", SWITCH_KEY], check=True, timeout=30)
+        cfg = os.path.expanduser("~/.ssh/config")
+        cur = open(cfg, encoding="utf-8").read() if os.path.exists(cfg) else ""
+        if "Host github-realty-multi" not in cur:
+            with open(cfg, "a", encoding="utf-8") as f:
+                f.write(SWITCH_SSH_HOST.format(key=SWITCH_KEY))
+            os.chmod(cfg, 0o600)
+        pub = open(SWITCH_KEY + ".pub", encoding="utf-8").read().strip()
+    except Exception as e:  # noqa: BLE001
+        log.exception("switchrepo key")
+        return await update.message.reply_text(f"❌ Не вдалося підготувати ключ: {type(e).__name__}: {e}")
+    if not go:
+        return await update.message.reply_text(
+            "🔑 Ключ доступу для тестового бота (це відкрита частина — її можна показувати):\n\n"
+            f"<code>{esc(pub)}</code>\n\n"
+            "1. GitHub → репозиторій <b>sulimga/realty-bot-multi</b> → Settings → Deploy keys → <b>Add deploy key</b>.\n"
+            "2. Title: <code>test bot</code>, Key: рядок вище (натисніть на нього — скопіюється).\n"
+            "3. Галочку «Allow write access» НЕ ставити → Add key.\n"
+            "4. Надішліть сюди: /switchrepo go",
+            parse_mode=ParseMode.HTML)
+    if ctx.application.bot_data.get("busy"):
+        return await update.message.reply_text("Зараз іде інша дія — спробуйте за хвилину.")
+    ctx.application.bot_data["busy"] = True
+    try:
+        await update.message.reply_text("🔀 Перемикаю тестовий бот на realty-bot-multi (гілка test)…")
+        proc = await asyncio.create_subprocess_exec("bash", os.path.join(ROOT, "deploy", "switch-to-multi.sh"),
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await proc.communicate()
+        await update.message.reply_text(f"<pre>{esc(cut(out.decode('utf-8', 'replace'), 3500))}</pre>",
+                                        parse_mode=ParseMode.HTML)
+    finally:
+        ctx.application.bot_data["busy"] = False
+    if proc.returncode == 0:
+        await update.message.reply_text("🔁 Перезапускаюсь на новому коді. Через ~15 с надішліть /start — ви адмін, "
+                                        "входи на сайти перенесено. Далі оновлення — як завжди, /update.")
+        await asyncio.sleep(1)
+        os._exit(0)
+    await update.message.reply_text("❌ Не перемкнуто — працюю на старій версії. Причина вище.")
+
+
 async def cmd_armhunt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Пошук вільної ARM-машини Oracle з цього сервера (deploy/setup-arm-hunt.sh, служба realty-armhunt).
     /armhunt — запустити (повторно — безпечно), /armhunt status — стан, /armhunt stop — зупинити. Лише головний бот."""
@@ -1641,6 +1705,7 @@ def main():
         app.add_handler(CommandHandler("delbot", cmd_delbot))
         app.add_handler(CommandHandler("callback", cmd_callback))
         app.add_handler(CommandHandler("armhunt", cmd_armhunt))
+        app.add_handler(CommandHandler("switchrepo", cmd_switchrepo))
         app.add_handler(CommandHandler("olxapp", cmd_olxapp))
         app.add_handler(CommandHandler("olxprobe", cmd_olxprobe))
     app.add_handler(CallbackQueryHandler(on_callback))
