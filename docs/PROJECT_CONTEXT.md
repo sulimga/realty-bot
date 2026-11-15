@@ -934,7 +934,8 @@ Cloudflare; кнопка «🔄 Перевірити» — один об'єкт 
 
 **Зміна ціни на сайтах (HAR власника 15.11.2026; тіла відповідей Chrome вирізав):**
 - **rieltor.ua** (оренда комерції, 13216649): `GET /api/offers/<id>/` (форма бере оголошення) → `PUT /api/offers/<id>/` з УСІМ
-  об'єктом, `"price": "3350"` (рядок) → 200. У тілі: `rate` (69 — платна ставка лишається), фото (`rentaImages` — ID), опис,
+  об'єктом, `"price": "3350"` (рядок) → 200. У тілі: `rate` (69 — НЕ платна ставка: сайт віддає його > 0 і в безкоштовних,
+  комерція Київ — 69; платність — у pickup/dailyCost), фото (`rentaImages` — ID), опис,
   адреса (cityId/streetId/houseId/ptolemyHouseId, housePolygon), detailParams, commission*, createdAt/updatedAt тощо.
   Окремого запиту публікації/модерації після збереження нема.
 - **dom.ria** (квартира, 35148240): `GET /node/getCouchRealtyById/<id>/` → `POST /node/saveRealty` (той самий, що при створенні)
@@ -1008,7 +1009,8 @@ Cloudflare; кнопка «🔄 Перевірити» — один об'єкт 
 - `boards/rieltor/run.py price --id N --price P [--currency USD] [--slot 1|2] [--account …] [--dry-run]` → `rieltor_price.py`:
   GET `/api/offers/<id>/` (оголошення або `{status, data}`) → те саме тіло з `"price": "<P>"` (рядок) → PUT `/api/offers/<id>/`
   (заголовки як у кабінеті: Origin/Referer my.rieltor.ua) → ще раз GET і перевірка ціни. Валюта: `currencyMagic` 1 грн / 2 $ / 3 €
-  має збігатися з валютою CRM, інакше відмова. Ставка (`rate`) і фото — як прочитали.
+  має збігатися з валютою CRM, інакше відмова. `rate` і фото — як прочитали (`rate` не вмикає платність; у повідомленнях бота
+  більше не показується — 15.11 власника збило з пантелику «ставка 69» на безкоштовному оголошенні).
 - `boards/domria/run.py price … [--account <user_id>]` → `domria_price.py`: `getCouchRealtyById` → характеристика ціни `234`/`235`
   = P (решту, зокрема `price`/`price_total`/`priceArr`, — як прочитали, як форма), `_id` лишається, `_rev` і інші `_…` — ні →
   `DomRiaClient.update_realty` (POST `/node/saveRealty`, Referer `…/update_form/price/<id>`, `partnerLogId: 5`) → перевірка.
