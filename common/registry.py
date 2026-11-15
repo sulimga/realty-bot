@@ -20,10 +20,18 @@ listings, яку читаємо в два боки (індекси за об'є�
 Реєстр нічого не знає про сайти: board — назва з boards.json, listing_id — те, що повернула програма сайту.
 Помилка реєстру не повинна ламати публікацію: диспетчер викликає record_run() в try.
 
+Акаунти: у людини може бути два входи на сайт (rieltor, dom.ria — мультибот). Номер слота (1/2) ненадійний — у слот 2
+можна підключити інший акаунт («🔄 Змінити вхід»), тому в оголошенні зберігається ще й ID акаунта на сайті (account),
+який повертає програма сайту. Зміна ціни піде з того входу, де зараз цей акаунт; нема такого — скажемо людині.
+
+Рішення власника 15.11.2026: старі оголошення не звіряємо і з журналу не підтягуємо — реєстр наповнюється з нуля
+новими публікаціями (`/registry reset` очищає тестову базу).
+
 Командний рядок (на сервері: cd /opt/realty-bot && .venv/bin/python common/registry.py …):
   stats [USER]          — скільки об'єктів і оголошень
   show <посилання|ключ> — об'єкт: хто й де його рекламує
-  import                — підтягнути оголошення з journal.jsonl (робиться само при першому відкритті бази)
+  import                — (вручну, якщо колись знадобиться) підтягнути оголошення з journal.jsonl
+  reset                 — очистити реєстр
 """
 
 import contextlib
@@ -68,7 +76,8 @@ CREATE TABLE IF NOT EXISTS listings(
   listing_id TEXT NOT NULL,                  -- ID оголошення на сайті
   object_key TEXT NOT NULL REFERENCES objects(key),
   user_id    INTEGER,                        -- Telegram ID власника оголошення
-  slot       INTEGER NOT NULL DEFAULT 1,     -- з якого входу (акаунта) викладено: 1 або 2
+  slot       INTEGER NOT NULL DEFAULT 1,     -- з якого входу викладено: 1 або 2 (на момент публікації)
+  account    TEXT,                           -- ID акаунта на сайті (dom.ria user_id тощо) — надійніше за слот
   via        TEXT,                           -- як викладено, якщо в сайту кілька шляхів (OLX: api | site)
   url        TEXT,
   draft      INTEGER NOT NULL DEFAULT 0,     -- чернетка / чекає оплати
@@ -125,9 +134,16 @@ def parse_price(text):
     return (int(digits) if digits else None), cur
 
 
+def _migrate(con):
+    cols = {r[1] for r in con.execute("PRAGMA table_info(listings)")}
+    if "account" not in cols:                      # бази, створені до 15.11.2026 16:20
+        con.execute("ALTER TABLE listings ADD COLUMN account TEXT")
+
+
 @contextlib.contextmanager
-def connect(path=None, auto_import=True):
-    """Відкрити базу (створює, якщо нема). При першому відкритті сама підтягує оголошення з journal.jsonl."""
+def connect(path=None, auto_import=False):
+    """Відкрити базу (створює, якщо нема). auto_import=True — при першому відкритті підтягнути journal.jsonl
+    (за замовчуванням вимкнено: рішення власника — реєстр з нуля)."""
     path = path or db_path()
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     con = sqlite3.connect(path, timeout=15)
@@ -136,6 +152,7 @@ def connect(path=None, auto_import=True):
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA busy_timeout=15000")
         con.executescript(SCHEMA)
+        _migrate(con)
         if auto_import and not con.execute("SELECT 1 FROM meta WHERE k='journal_imported'").fetchone():
             import_journal(con)
         yield con
@@ -190,23 +207,24 @@ def upsert_object(con, url, article=None, price_text=None):
     return key
 
 
-def add_listing(con, key, board, listing_id, user_id, *, slot=1, via=None, url=None, draft=False,
+def add_listing(con, key, board, listing_id, user_id, *, slot=1, account=None, via=None, url=None, draft=False,
                 price=None, currency=None, ts=None):
     """Червона вершина: оголошення board/listing_id об'єкта key у користувача user_id."""
     ts = ts or now()
     con.execute("""
-        INSERT INTO listings(board, listing_id, object_key, user_id, slot, via, url, draft, price, currency,
+        INSERT INTO listings(board, listing_id, object_key, user_id, slot, account, via, url, draft, price, currency,
                              status, created_at, updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?, 'active', ?, ?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?, 'active', ?, ?)
         ON CONFLICT(board, listing_id) DO UPDATE SET
           object_key=excluded.object_key, user_id=COALESCE(excluded.user_id, listings.user_id),
-          slot=excluded.slot, via=COALESCE(excluded.via, listings.via), url=COALESCE(excluded.url, listings.url),
+          slot=excluded.slot, account=COALESCE(excluded.account, listings.account), via=COALESCE(excluded.via, listings.via), url=COALESCE(excluded.url, listings.url),
           draft=excluded.draft, price=COALESCE(excluded.price, listings.price),
           currency=COALESCE(excluded.currency, listings.currency), status='active', updated_at=excluded.updated_at
-    """, (board, str(listing_id), key, user_id, int(slot or 1), via, url, int(bool(draft)), price, currency, ts, ts))
+    """, (board, str(listing_id), key, user_id, int(slot or 1), str(account) if account else None, via, url,
+          int(bool(draft)), price, currency, ts, ts))
 
 
-def _record(con, board, argv, result, user_id, ts=None, with_price=True):
+def _record(con, board, argv, result, user_id, ts=None, with_price=True, only_new=False):
     if not result or not result.get("ok") or not argv:
         return None
     cmd = argv[0]
@@ -216,13 +234,16 @@ def _record(con, board, argv, result, user_id, ts=None, with_price=True):
         crm_url = _arg(argv, "--url")
         if not crm_url:
             return None
+        if only_new and con.execute("SELECT 1 FROM listings WHERE board=? AND listing_id=?",
+                                    (board, str(result["id"]))).fetchone():
+            return None                      # імпорт журналу не чіпає вже відомі оголошення (власника, акаунт, ціну)
         price_text = result.get("crm_price") if with_price else None
         key = upsert_object(con, crm_url, article=result.get("article"), price_text=price_text)
         if not key:
             return None
         amount, cur = parse_price(price_text)
         add_listing(con, key, board, result["id"], user_id, slot=result.get("account_slot") or 1,
-                    via=result.get("via"), url=result.get("url"), draft=result.get("draft"),
+                    account=result.get("account"), via=result.get("via"), url=result.get("url"), draft=result.get("draft"),
                     price=amount, currency=cur, ts=ts)
         return key
     if cmd == "techpassport":                # dom.ria: техпаспорт до чернетки → оголошення опубліковане
@@ -254,7 +275,7 @@ def import_journal(con, user_id=None, path=None):
                     continue
                 res = {"ok": e.get("ok"), "id": e.get("id"), "url": e.get("url"), "draft": e.get("draft")}
                 if _record(con, e.get("board"), e.get("argv") or [], res, user_id, ts=e.get("ts"),
-                           with_price=False):
+                           with_price=False, only_new=True):
                     n += 1
     con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('journal_imported', ?)", (f"{now()} ({n})",))
     return n
@@ -269,7 +290,7 @@ def object_users(con, key):
 
 def user_object_listings(con, user_id, key):
     """Користувач «знає», на яких сайтах і з якими ID висить об'єкт."""
-    return [dict(r) for r in con.execute("SELECT board, listing_id, slot, via, url, draft, price, currency "
+    return [dict(r) for r in con.execute("SELECT board, listing_id, slot, account, via, url, draft, price, currency "
                                          "FROM listings WHERE user_id=? AND object_key=? AND status='active' "
                                          "ORDER BY board", (user_id, key))]
 
@@ -298,6 +319,26 @@ def objects_to_check(con, limit=None):
     return [dict(r) for r in con.execute(q)]
 
 
+def reset(con):
+    """Очистити реєстр повністю (рішення власника 15.11.2026: старі оголошення не звіряємо, починаємо з нуля)."""
+    n = con.execute("SELECT count(*) FROM listings").fetchone()[0]
+    con.execute("DELETE FROM listings")
+    con.execute("DELETE FROM objects")
+    con.execute("DELETE FROM meta WHERE k='journal_imported'")
+    con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('reset_at', ?)", (f"{now()} ({n})",))
+    return n
+
+
+def count_all():
+    with connect() as con:
+        return con.execute("SELECT count(*) FROM listings").fetchone()[0]
+
+
+def reset_all():
+    with connect() as con:
+        return reset(con)
+
+
 def find_object(con, url_or_key):
     key = object_key(url_or_key)[0] if re.match(r"^https?://", url_or_key or "", re.I) else url_or_key
     r = con.execute("SELECT * FROM objects WHERE key=?", (key,)).fetchone()
@@ -308,12 +349,15 @@ def stats(con, user_id=None):
     w, p = ("WHERE status='active' AND user_id=?", (user_id,)) if user_id else ("WHERE status='active'", ())
     by_board = {r[0]: (r[1], r[2]) for r in con.execute(
         f"SELECT board, count(*), sum(draft) FROM listings {w} GROUP BY board ORDER BY board", p)}
+    by_account = {}
+    for b, acc, n in con.execute(f"SELECT board, account, count(*) FROM listings {w} GROUP BY board, account", p):
+        by_account.setdefault(b, []).append((acc, n))
     objs = con.execute(f"SELECT count(DISTINCT object_key) FROM listings {w}", p).fetchone()[0]
     no_price = con.execute(f"SELECT count(*) FROM listings {w} AND price IS NULL", p).fetchone()[0]
     shared = con.execute("SELECT count(*) FROM (SELECT object_key FROM listings WHERE status='active' "
                          "GROUP BY object_key HAVING count(DISTINCT user_id) > 1)").fetchone()[0]
     imp = con.execute("SELECT v FROM meta WHERE k='journal_imported'").fetchone()
-    return {"objects": objs, "by_board": by_board, "no_price": no_price, "shared": shared,
+    return {"objects": objs, "by_board": by_board, "by_account": by_account, "no_price": no_price, "shared": shared,
             "journal_imported": imp[0] if imp else None}
 
 
@@ -328,6 +372,9 @@ def stats_text(user_id=None):
     lines = [f"Об'єктів: {s['objects']} · оголошень: {total}"]
     for b, (n, dr) in s["by_board"].items():
         lines.append(f"• {b}: {n}" + (f" (чернеток / чекають оплати: {dr})" if dr else ""))
+        accs = s["by_account"].get(b) or []
+        if len(accs) > 1:
+            lines += [f"    акаунт {a or 'невідомий'}: {k}" for a, k in accs]
     if s["no_price"]:
         lines.append(f"Без відомої ціни (зі старого журналу): {s['no_price']} — ціну поставить перша перевірка CRM")
     if recent:
@@ -338,6 +385,8 @@ def stats_text(user_id=None):
             lines.append(f"• {r['article'] or '—'} · {price.strip()} · {r['boards']}")
     if s["journal_imported"]:
         lines.append(f"\nІз журналу підтягнуто: {s['journal_imported']}")
+    if not total:
+        lines.append("Поки порожньо — оголошення з'являться тут після публікацій через бота.")
     return "\n".join(lines)
 
 
@@ -354,6 +403,8 @@ def _main(argv):
             print(json.dumps(o, ensure_ascii=False, indent=1))
             for u in object_users(con, o["key"]):
                 print(f"користувач {u}:", json.dumps(user_object_listings(con, u, o["key"]), ensure_ascii=False))
+    elif cmd == "reset":
+        print("очищено записів:", reset_all())
     elif cmd == "import":
         with connect(auto_import=False) as con:
             print("підтягнуто з журналу:", import_journal(con))

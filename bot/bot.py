@@ -482,6 +482,22 @@ async def cmd_registry(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/registry — що записано в реєстр «об'єкт CRM ↔ оголошення» (основа для зміни цін з CRM)."""
     if not is_owner(update):
         return
+    args = [a.lower() for a in (ctx.args or [])]
+    if args[:1] == ["reset"]:                # очистити реєстр (рішення 15.11.2026: старі не звіряємо, наповнюємо з нуля)
+        try:
+            if args[1:2] == ["так"]:
+                n = await asyncio.to_thread(D.registry().reset_all)
+                await update.message.reply_text(f"📒 Реєстр очищено (записів було: {n}). Далі він наповнюється "
+                                                f"новими публікаціями через бота.")
+            else:
+                n = await asyncio.to_thread(D.registry().count_all)
+                await update.message.reply_text(f"Очистити реєстр оголошень ({n} записів)? На сайтах нічого не "
+                                                f"зміниться — лише бот забуде старі записи.\nЩоб підтвердити, "
+                                                f"надішліть: /registry reset так")
+        except Exception as e:  # noqa: BLE001
+            log.exception("registry reset")
+            await update.message.reply_text(f"Реєстр: помилка {type(e).__name__}: {e}")
+        return
     try:
         text = await asyncio.to_thread(D.registry().stats_text, owner_id())
     except Exception as e:  # noqa: BLE001

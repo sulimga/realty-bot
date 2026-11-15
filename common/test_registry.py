@@ -3,6 +3,7 @@
 Сценарій — фліпборд 15.11.2026: об'єкт 1 у user1 (rieltor) і user2 (OLX, rieltor, dom.ria);
 об'єкт 2 у user2 (OLX) і user3 (OLX, rieltor); user4 без цих об'єктів.
 Публікації йдуть через справжній диспетчер (dispatcher.run) з підставною програмою сайту.
+Також: акаунти (два входи на сайт), очищення реєстру, старий журнал не підтягується сам, перехід старої бази на нову схему.
 """
 
 import asyncio
@@ -41,7 +42,7 @@ for txt, exp in (("2 500 000 $", (2500000, "USD")), ("4 500 $", (4500, "USD")), 
                  ("120 000 €", (120000, "EUR")), ("226 000 $", (226000, "USD")), (None, (None, None))):
     check(R.parse_price(txt) == exp, f"ціна «{txt}» → {exp}")
 
-# --- старий журнал (до реєстру): має підтягнутись при першому відкритті бази
+# --- старий журнал (до реєстру): сам НЕ підтягується (рішення 15.11.2026), лише вручну
 with open(os.path.join(TMP, "journal.jsonl"), "w", encoding="utf-8") as f:
     for e in (
         {"ts": "2026-11-01 10:00:00", "board": "rieltor", "argv": ["post", "--url", LP, "--no-ask"], "ok": True,
@@ -64,7 +65,8 @@ with open(os.path.join(FAKE_DIR, "run.py"), "w", encoding="utf-8") as f:
             "a = sys.argv[1:]\n"
             "g = lambda n: a[a.index(n) + 1] if n in a else None\n"
             "res = {'type': 'result', 'ok': g('--fail') is None, 'text': 'ok', 'id': g('--id'), 'url': None,\n"
-            "       'draft': '--draft' in a, 'crm_price': g('--price'), 'article': g('--art'), 'via': g('--via')}\n"
+            "       'draft': '--draft' in a, 'crm_price': g('--price'), 'article': g('--art'), 'via': g('--via'),\n"
+            "       'account': g('--acc'), 'account_slot': int(g('--slot') or 1)}\n"
             "print(json.dumps(res, ensure_ascii=False))\n")
 boards = {k: {"title": k, "dir": FAKE_DIR, "entry": "run.py", "enabled": True, "timeout_min": 1}
           for k in ("olx", "rieltor", "domria")}
@@ -85,11 +87,12 @@ async def post(board, user, url, lid, price="225 000 $", *extra):
 async def main():
     await post("rieltor", 1, U1, "R-1")
     await post("olx", 2, U1_COLLEAGUE, "O-2", "225 000 $", "--via", "api")
-    await post("rieltor", 2, U1_COLLEAGUE, "R-2")
-    await post("domria", 2, U1_COLLEAGUE, "D-2", "225 000 $", "--draft")
+    await post("rieltor", 2, U1_COLLEAGUE, "R-2", "225 000 $", "--acc", "acc-A", "--slot", "1")
+    await post("domria", 2, U1_COLLEAGUE, "D-2", "225 000 $", "--draft", "--acc", "777001")
     await post("olx", 2, U2, "O-3", "2 500 000 $")
     await post("olx", 3, U2, "O-4", "2 500 000 $")
     await post("rieltor", 3, U2, "R-4", "2 500 000 $")
+    await post("rieltor", 2, U2, "R-5", "2 500 000 $", "--acc", "acc-B", "--slot", "2")   # другий акаunt user2
     await post("rieltor", 4, U2, "X-dry", "2 500 000 $", "--dry-run")     # перевірка без відправки — не пишемо
     await post("rieltor", 4, U2, "X-fail", "2 500 000 $", "--fail", "1")  # невдала публікація — не пишемо
     await D.run("domria", ["techpassport", "--realty-id", "D-2", "--id", "D-2"], _noop, _noop, user=2)
@@ -102,7 +105,8 @@ with R.connect() as con:
     check(R.object_users(con, K2) == [2, 3], "об'єкт 2 знає своїх: user2, user3")
     u2 = {(x["board"], x["listing_id"]) for x in R.user_object_listings(con, 2, K1)}
     check(u2 == {("olx", "O-2"), ("rieltor", "R-2"), ("domria", "D-2")}, "user2 знає свої оголошення по об'єкту 1")
-    check([x["listing_id"] for x in R.user_object_listings(con, 2, K2)] == ["O-3"], "user2 по об'єкту 2 — лише OLX")
+    check([x["listing_id"] for x in R.user_object_listings(con, 2, K2)] == ["O-3", "R-5"],
+          "user2 по об'єкту 2 — OLX і rieltor з другого акаунта")
     o1 = R.find_object(con, U1_COLLEAGUE)
     check(o1 and len(json.loads(o1["urls"])) == 2, "об'єкт 1 пам'ятає обидва посилання (моє й колеги)")
     check(con.execute("SELECT draft FROM listings WHERE listing_id='D-2'").fetchone()[0] == 0,
@@ -119,8 +123,17 @@ with R.connect() as con:
     check(plan == {}, "ціна та сама → нічого не міняємо")
     con.execute("UPDATE listings SET price=2400000 WHERE listing_id='O-4'")
     plan, _ = R.update_plan(con, K2, 2400000, "USD")
-    check({u: [x["listing_id"] for x in v] for u, v in plan.items()} == {2: ["O-3"], 3: ["R-4"]},
+    check({u: sorted(x["listing_id"] for x in v) for u, v in plan.items()} == {2: ["O-3", "R-5"], 3: ["R-4"]},
           "де ціна вже нова (O-4) — запиту не буде")
+    accs = {x["listing_id"]: (x["account"], x["slot"]) for x in R.user_object_listings(con, 2, K1)
+            + R.user_object_listings(con, 2, K2)}
+    check(accs["R-2"] == ("acc-A", 1) and accs["R-5"] == ("acc-B", 2) and accs["D-2"] == ("777001", 1),
+          "два акаунти rieltor у user2 записані окремо (акаунт + слот), dom.ria — з ID акаунта")
+    check(R.object_users(con, R.object_key(LP)[0]) == [], "старий журнал сам не підтягнувся")
+    owners = dict(con.execute("SELECT listing_id, user_id FROM listings").fetchall())
+    print("   підтягнуто вручну:", R.import_journal(con))
+    check(all(con.execute("SELECT user_id FROM listings WHERE listing_id=?", (k,)).fetchone()[0] == v
+              for k, v in owners.items()), "ручний імпорт журналу не перезаписав власників відомих оголошень")
 
     kl = R.object_key(LP)[0]
     imported = {r[0]: r[1] for r in con.execute("SELECT listing_id, draft FROM listings WHERE object_key=?", (kl,))}
@@ -133,5 +146,22 @@ with R.connect() as con:
           "сторожу перевіряти 3 об'єкти (не 9 оголошень)")
 
 print("\n" + R.stats_text(2))
+check("акаунт acc-A: 1" in R.stats_text(2) and "акаунт acc-B: 1" in R.stats_text(2), "/registry показує розбивку по акаунтах")
+
+before = R.count_all()
+n = R.reset_all()
+check(n == before == 10 and R.count_all() == 0 and "Поки порожньо" in R.stats_text(), f"очищення реєстру (було {n})")
+check("Із журналу" not in R.stats_text(), "після очищення — без рядка про журнал")
+
+# --- база, створена до появи колонки account, відкривається й отримує колонку
+import sqlite3  # noqa: E402
+old_db = os.path.join(TMP, "old.db")
+c = sqlite3.connect(old_db)
+c.executescript(R.SCHEMA.replace("  account    TEXT,", "").replace(
+    "  account    TEXT,                           -- ID акаунта на сайті (dom.ria user_id тощо) — надійніше за слот\n", ""))
+c.close()
+with R.connect(old_db) as con:
+    cols = {r[1] for r in con.execute("PRAGMA table_info(listings)")}
+check("account" in cols, "стара база: колонку account додано")
 print("\n" + ("УСЕ ДОБРЕ" if not FAILS else f"ПОМИЛОК: {len(FAILS)}"))
 sys.exit(1 if FAILS else 0)
