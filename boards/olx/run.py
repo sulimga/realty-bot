@@ -512,11 +512,9 @@ def official_price(params):
             "budget": False, "trade": False}
 
 
-def official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate, me=None):
+def official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate):
     payload = {"title": title, "description": desc, "category_id": cid,
-               "advertiser_type": (("business" if me.get("is_business") else "private")      # тип акаунта OLX, а не «липке» налаштування
-                                   if isinstance(me, dict) and "is_business" in me
-                                   else cfg.get("private_business", "business")),
+               "advertiser_type": cfg.get("private_business", "business"),     # усі наші оголошення — бізнес (агенція)
                "contact": {"name": cont["person"], "phone": cont["phone"]},
                "location": {k: loc[k] for k in ("city_id", "district_id", "latitude", "longitude")
                             if loc.get(k) is not None},
@@ -668,8 +666,7 @@ def cmd_post(a):
             urls = urls[:limit]
 
         if use_api:
-            payload = official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate,
-                                      me if (use_api and not a.dry_run) else None)
+            payload = official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate)
         else:
             payload = {"brand": "olxua", "lang": "uk", "category_id": cid,
                        **{k: loc[k] for k in ("city_id", "district_id") if k in loc},
@@ -837,7 +834,22 @@ def cmd_api_login(a):
             print(f"/users/me → HTTP {st}: {str(body)[:200]}")
     except (OlxApiError,) + NET_ERRORS as e:
         print(f"/users/me не відповів: {e}")
-    bp.result(True, f"OLX: підключено офіційно ✅ ({who}). Токен діє ще {fmt_left(off.expires_in())}, далі бот оновлює його сам.")
+    # Ім'я й телефон для оголошень — одразу при підключенні, окремо для цього акаунта (підказка — з акаунта OLX
+    # або раніше збережене для нього). Змінили акаунт — спитає знову.
+    note = ""
+    try:
+        me = olx_me(off)
+        if me.get("id"):
+            cfg = load_cfg()
+            cur = (cfg.get("contacts") or {}).get(str(me["id"]))
+            print(f"OLX підключено ({who}). Тепер вкажіть контакт, який буде в оголошеннях.")
+            cont = ask_contact(me, cur)
+            cfg.setdefault("contacts", {})[str(me["id"])] = cont
+            save_cfg(cfg)
+            note = f"\nКонтакт в оголошеннях: {cont['person']}, {cont['phone']}"
+    except OlxError as e:
+        note = f"\n⚠️ Контакт не збережено ({e}) — бот спитає його при першій публікації."
+    bp.result(True, f"OLX: підключено офіційно ✅ ({who}). Токен діє ще {fmt_left(off.expires_in())}, далі бот оновлює його сам." + note)
 
 
 def _mask(x):
