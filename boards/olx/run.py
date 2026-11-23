@@ -272,7 +272,7 @@ def crm_admin(estate):
         print("      CRM-адмінка: у презентації нема ID об'єкта — визначаю за заголовком")
         return None
     if not os.path.exists(ADM.COOKIE_FILE):
-        print("      CRM-адмінка: cookie нема (🔑 Вхід → CRM) — визначаю за заголовком")
+        print("      CRM-адмінка не підключена — визначаю за заголовком")
         return None
     try:
         a = ADM.fetch_estate_admin_data(estate["estate_id"])
@@ -512,9 +512,11 @@ def official_price(params):
             "budget": False, "trade": False}
 
 
-def official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate):
+def official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate, me=None):
     payload = {"title": title, "description": desc, "category_id": cid,
-               "advertiser_type": cfg.get("private_business", "business"),
+               "advertiser_type": (("business" if me.get("is_business") else "private")      # тип акаунта OLX, а не «липке» налаштування
+                                   if isinstance(me, dict) and "is_business" in me
+                                   else cfg.get("private_business", "business")),
                "contact": {"name": cont["person"], "phone": cont["phone"]},
                "location": {k: loc[k] for k in ("city_id", "district_id", "latitude", "longitude")
                             if loc.get(k) is not None},
@@ -538,32 +540,56 @@ def packets_left(off, cid):
                if p.get("is_active") and str(cid) in [str(x) for x in (p.get("categories_ids") or [])])
 
 
-def contacts_api(off, cfg):
-    """Ім'я й телефон для контакту (email в офіційному API не потрібен). Беремо з налаштувань, інакше з акаунта OLX."""
-    me = {}
-    if not (cfg.get("person") and cfg.get("phone")):
-        try:
-            st, body = off.get("/users/me")
-            if st == 200 and isinstance(body, dict) and isinstance(body.get("data"), dict):
-                me = body["data"]
-        except (OlxApiError,) + NET_ERRORS:
-            me = {}
-    changed = False
-    for key, label, guess in (("person", "Контактна особа (ім'я в оголошенні)", me.get("name")),
-                              ("phone", "Телефон для оголошення", me.get("phone") or me.get("phone_login"))):
-        if cfg.get(key):
-            continue
+def olx_me(off):
+    """Дані акаунта OLX, до якого підключено доступ ({} — не вдалось дізнатись)."""
+    try:
+        st, body = off.get("/users/me")
+        if st == 200 and isinstance(body, dict) and isinstance(body.get("data"), dict):
+            return body["data"]
+    except (OlxApiError,) + NET_ERRORS:
+        pass
+    return {}
+
+
+def ask_contact(me, cur=None):
+    """Питає ім'я й телефон для оголошення; підказка — з акаунта OLX (або поточні значення при зміні)."""
+    cur = cur or {}
+    out = {}
+    for key, label, guess in (("person", "Контактна особа (ім'я в оголошенні)", cur.get("person") or me.get("name")),
+                              ("phone", "Телефон для оголошення", cur.get("phone") or me.get("phone") or me.get("phone_login"))):
         if guess:
-            kind, val = bp.ask_choice(f"OLX: {label}", [(guess, str(guess))], allow_text=True)
+            kind, val = bp.ask_choice(f"OLX: {label}", [(str(guess), str(guess))], allow_text=True)
         else:
-            kind, val = ("text", bp.ask_text(f"OLX: {label} (запам'ятаю для наступних оголошень)"))
-        if not val:
+            kind, val = ("text", bp.ask_text(f"OLX: {label}"))
+        if not val or not str(val).strip():
             raise OlxError(f"не вказано: {label}")
-        cfg[key] = str(val).strip()
-        changed = True
-    if changed:
+        out[key] = str(val).strip()
+    return out
+
+
+def contacts_api(off, cfg, me=None):
+    """Ім'я й телефон оголошення (email в офіційному API не потрібен).
+    Зберігаються ОКРЕМО для кожного акаунта OLX (cfg["contacts"][<id акаунта>]) — інакше після підключення іншого акаунта
+    в оголошення потрапляли б контакти першого. Для нового акаунта питаємо, підказка — дані цього акаунта."""
+    me = me if me is not None else olx_me(off)
+    acc = str(me.get("id") or "")
+    if not acc:
+        raise OlxError("не вдалось дізнатись, який акаунт OLX підключено — спробуйте ще раз або підключіть OLX заново")
+    store = cfg.setdefault("contacts", {})
+    cont = store.get(acc)
+    if not (isinstance(cont, dict) and cont.get("person") and cont.get("phone")):
+        cont = ask_contact(me)
+        store[acc] = cont
         save_cfg(cfg)
-    return {"person": cfg["person"], "phone": cfg["phone"]}
+    return {"person": cont["person"], "phone": cont["phone"]}
+
+
+def change_contact(off, cfg, me, cur):
+    """«Змінити контакт» перед створенням: нові значення запам'ятовуються для цього акаунта OLX."""
+    cont = ask_contact(me, cur)
+    cfg.setdefault("contacts", {})[str(me.get("id") or "")] = cont
+    save_cfg(cfg)
+    return cont
 
 
 # ------------------------------------------------------------------ команди
@@ -630,7 +656,8 @@ def cmd_post(a):
         if client:
             cont = contacts(client, cfg)
         elif use_api and not a.dry_run:
-            cont = contacts_api(off, cfg)
+            me = olx_me(off)
+            cont = contacts_api(off, cfg, me)
         else:
             cont = {k: cfg.get(k) or "?" for k in ("person", "phone", "email")}
 
@@ -641,7 +668,8 @@ def cmd_post(a):
             urls = urls[:limit]
 
         if use_api:
-            payload = official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate)
+            payload = official_payload(cid, params, loc, title, desc, cont, urls, cfg, estate,
+                                      me if (use_api and not a.dry_run) else None)
         else:
             payload = {"brand": "olxua", "lang": "uk", "category_id": cid,
                        **{k: loc[k] for k in ("city_id", "district_id") if k in loc},
@@ -657,6 +685,8 @@ def cmd_post(a):
                    "; ".join(describe_params(cid, params)),
                    f"Місце: {place}", f"Фото: {len(urls)}"] + [f"⚠️ {n}" for n in notes]
         if use_api and not a.dry_run:
+            summary.append(f"Акаунт OLX: {me.get('name') or me.get('id') or '?'}")
+            summary.append(f"Контакт в оголошенні: {cont['person']}, {cont['phone']}")
             left = packets_left(off, cid)
             summary.append("Пакети OLX: " + ("не вдалось дізнатись" if left is None else
                            (f"є {left} розміщень — спишеться з пакета" if left > 0 else
@@ -669,9 +699,19 @@ def cmd_post(a):
             bp.result(True, "OLX: перевірка без відправки — дані зібрано (див. вище), нічого не створено")
             return
 
-        kind, ok = bp.ask_choice("OLX: усе вірно? Після «Створити» оголошення з'явиться в кабінеті OLX "
-                                 "і чекатиме на оплату розміщення",
-                                 [("yes", "✅ Створити на OLX"), ("no", "❌ Скасувати")])
+        while True:
+            opts = [("yes", "✅ Створити на OLX")]
+            if use_api:
+                opts.append(("contact", "👤 Змінити ім'я/телефон"))
+            opts.append(("no", "❌ Скасувати"))
+            kind, ok = bp.ask_choice("OLX: усе вірно? Після «Створити» оголошення з'явиться в кабінеті OLX "
+                                     "і чекатиме на оплату розміщення", opts)
+            if ok == "contact" and use_api:
+                cont = change_contact(off, cfg, me, cont)
+                payload["contact"] = {"name": cont["person"], "phone": cont["phone"]}
+                print(f"Контакт в оголошенні: {cont['person']}, {cont['phone']}")
+                continue
+            break
         if ok != "yes":
             bp.result(False, "OLX: скасовано, на OLX нічого не відправлено")
             return
